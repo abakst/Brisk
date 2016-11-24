@@ -13,12 +13,19 @@ import Id
 import Type
 
 data Pred b = Rel Op (Pred b) (Pred b)
+            | PConst Const
             | PVar b
             | PTrue
+
+data Const = CInt Int              
               
 data Op = Eq | Le | NEq
+        | Plus | Minus
 
 pSingle v x = (v, Rel Eq (PVar v) (PVar x))
+pExpr v o e = (v, Rel o (PVar v) e)
+ePlus e1 e2   = Rel Plus e1 e2
+eMinus e1 e2  = Rel Minus e1 e2
 
 data EffExpr b a =
    EVal    (b, Pred b) a
@@ -77,16 +84,21 @@ instance (Pretty Type, Pretty b) => Pretty (EffExpr b a) where
   pp (Recv t)   = text "recv" <> brackets (pp t)
   pp (EType t)  = pp t
 
+instance Pretty Const where
+  pp (CInt i) = int i
 
 instance Pretty b => Pretty (Pred b) where
   pp (Rel o p1 p2) = parens (pp p1) <+> pp o <+> parens (pp p2)
   pp (PVar b)      = pp b
+  pp (PConst c)    = pp c
   pp (PTrue)       = text "true"
 
 instance Pretty Op where
-  pp Eq  = text "="
-  pp NEq = text "!="
-  pp Le  = text "<"
+  pp Eq    = text "="
+  pp NEq   = text "!="
+  pp Le    = text "<"
+  pp Plus  = text "+"
+  pp Minus = text "-"
 
 collectArgs (ELam b e _) = go [b] e
   where

@@ -9,6 +9,7 @@ getPid = expect
 
 expectSend :: Process ()
 expectSend = do p <- getPid
+                n <- expect
                 case p of
                   Nothing -> return ()
-                  Just p' -> send p' (0 :: Int) >> expectSend
+                  Just p' -> send p' (n + 1 :: Int) >> expectSend

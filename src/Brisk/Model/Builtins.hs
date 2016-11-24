@@ -36,8 +36,8 @@ monadBuiltin =  [ (bindMName, bindWiredIn)
                 ]   
 
 builtin :: [(String, String, EffExpr Name ())]
-builtin = [ ("GHC.Num", "-", x $->$ y $->$ EVal (v, PTrue) ())
-          , ("GHC.Num", "+", x $->$ y $->$ EVal (v, PTrue) ())
+builtin = [ ("GHC.Num", "-", t $->$ x $->$ y $->$ EVal (pExpr v Eq (eMinus (PVar x) (PVar y))) ())
+          , ("GHC.Num", "+", t $->$ x $->$ y $->$ EVal (pExpr v Eq (ePlus (PVar x) (PVar y))) ())
           , ("GHC.Types", "I#", x $->$ EVal (v, PTrue) ())
           , ("GHC.Classes", "==", x $->$ y $->$ EVal (v, PTrue) ())
           , ("GHC.Prim", "void#", EVal (v, PTrue) ())
