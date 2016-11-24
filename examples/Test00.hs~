@@ -1,0 +1,20 @@
+module Test00 where
+
+import Control.Distributed.Process
+
+{-@ test00 :: forall p. (send p {v:Int | v = 3 }) @-}
+test00 :: ProcessId -> Process ()
+test00 p = send p (3 :: Int)
+
+{-@ test01 :: (recv : ProcessId) @-}
+test01 :: Process ProcessId
+test01 = expect
+
+{-@ test02 :: (recv : ProcessId) `bind` (lam $ \p -> send p {v:Int | v = 3}) @-} 
+test02 :: Process ()  
+test02 = test01 >>= (\p -> test00 p)
+
+{-@ test03 :: forall m. m >> m >> m@-}
+test03 m = m >> m >> m
+
+test03  

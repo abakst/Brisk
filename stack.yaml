@@ -1,0 +1,8 @@
+flags: {}
+packages:
+- '.'
+compiler-check: newer-minor
+resolver: lts-6.24
+extra-deps:
+  - ghc-7.10.3
+  - distributed-process-0.6.1
