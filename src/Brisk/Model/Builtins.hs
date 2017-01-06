@@ -6,61 +6,69 @@ import Data.Maybe
 import Brisk.Model.Types
 import Brisk.Model.GhcInterface
 
-thenWiredIn :: EffExpr Name ()       
-thenWiredIn = a $->$ b $->$ m $->$ n $->$ EBind (EVar m ()) (EVar n ()) ()
+thenWiredIn :: EffExpr Id ()       
+thenWiredIn = a $->$ b $->$ m $->$ n $->$ EBind (EVar m ()) (ELam "_" (EVar n ()) ()) ()
   where
-    m = builtinName (-1)
-    n = builtinName (-2)
-    a = builtinName (-3)
-    b = builtinName (-4)
+    m = "m"
+    n = "n"
+    a = "a"
+    b = "b"
 
-bindWiredIn :: EffExpr Name ()
+bindWiredIn :: EffExpr Id ()
 bindWiredIn
   = a $->$ b $->$ m $->$ n $->$ EBind (EVar m ()) (EVar n ()) ()
   where
-    m = builtinName (-1)
-    n = builtinName (-2)
-    a = builtinName (-3)
-    b = builtinName (-4)
+    m = "$m"
+    n = "$n"
+    a = "$a"
+    b = "$b"
 
-returnWiredIn :: EffExpr Name ()
+returnWiredIn :: EffExpr Id ()
 returnWiredIn
-  = a $->$ e $->$ EReturn (var e) ()
+  = a $->$ e $->$ EReturn (var e ()) ()
   where
-    a = builtinName (-3)
-    e = builtinName (-4)
+    a = "a"
+    e = "e"
 
 monadBuiltin =  [ (bindMName, bindWiredIn)
                 , (thenMName, thenWiredIn)
                 , (returnMName, returnWiredIn)
                 ]   
-
-builtin :: [(String, String, EffExpr Name ())]
-builtin = [ ("GHC.Num", "-", t $->$ x $->$ y $->$ EVal (pExpr v Eq (eMinus (PVar x) (PVar y))) ())
-          , ("GHC.Num", "+", t $->$ x $->$ y $->$ EVal (pExpr v Eq (ePlus (PVar x) (PVar y))) ())
-          , ("GHC.Types", "I#", x $->$ EVal (v, PTrue) ())
+{-
+builtin :: [(String, String, EffExpr Id ())]
+builtin = [ ("GHC.Num", "-", t $->$ x $->$ y $->$ EVal (pExpr v Eq (eMinus (pVar x ()) (pVar y ())) ()) ())
+          , ("GHC.Num", "+", t $->$ x $->$ y $->$ EVal (pExpr v Eq (ePlus (pVar x ()) (pVar y ())) ()) ())
+          , ("GHC.Types", "I#", x $->$ (EVar x ()))
+          , ("GHC.Base", "$", t $->$ t $->$ x $->$ y $->$ EApp (EVar x ()) (EVar y ()) ())
+          , ("GHC.Base", "fail", t $->$ x $->$ y $->$ (EVal (v, PTrue) ()))
           , ("GHC.Classes", "==", x $->$ y $->$ EVal (v, PTrue) ())
           , ("GHC.Prim", "void#", EVal (v, PTrue) ())
           , ("GHC.Tuple", "()", EVal (v, PTrue) ())
           , ("Control.Exception.Base", "patError", x $->$ EVal (v, PTrue) ())
+          , ("GHC.CString", "unpackCString#", x $->$ EVal (v, PTrue) ())
 
           , ("Control.Distributed.Process.Internal.Primitives", "send",
-             t $->$ x $->$ y $->$ EProcess (Send (var x) (var y)) (EVal (v, PTrue) ()) ())
+             t $->$ x $->$ y $->$ EProcess (Send (var t ()) (var x ()) (var y ()) ()) (EVal (v, PTrue) ()) ())
+
+          , ("Control.Distributed.Process.Internal.Primitives", "getSelfPid",
+             EProcess (Self ()) (EVal (v, PTrue) ()) ())
+
+          , ("Control.Distributed.Process", "spawnLocal",
+             t $->$ EProcess (Spawn (var t ()) ()) (EVal (v, PTrue) ()) ())
 
           , ("Control.Distributed.Process.Internal.Primitives", "expect",
-             t $->$ EProcess (Recv (var t)) (EVal (v, PTrue) ()) ())
-          -- , ("Control.Distributed", "spawn",  undefined)
+             t $->$ EProcess (Recv (var t ()) ()) (EVal (v, PTrue) ()) ())
           ]
   where
-    v = builtinName (0) 
-    x = builtinName (-2)
-    y = builtinName (-3)
-    t = builtinName (-1)
-
+    v = vv
+    x = "x"
+    y = "y"
+    t = "t"
+-}
 isMonadOp :: NamedThing a => a -> Bool
 isMonadOp 
   = isJust . monadOp
 
-monadOp :: NamedThing a => a -> Maybe (EffExpr Name ())  
+monadOp :: NamedThing a => a -> Maybe (EffExpr Id ())  
 monadOp f
   = lookup (getName f) monadBuiltin

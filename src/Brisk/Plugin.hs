@@ -1,7 +1,10 @@
 module Brisk.Plugin (plugin) where
 
 import GhcPlugins
+import System.FilePath.Find
+import Paths_brisk
 import Brisk.Model.Extract
+import Brisk.Model.Spec
 
 plugin = briskPlugin       
 
@@ -23,5 +26,14 @@ briskPass bs guts
 runBrisk :: [String] -> ModGuts -> CoreProgram -> CoreM CoreProgram   
 runBrisk bs mg binds 
   = do hsenv <- getHscEnv
-       liftIO $ runMGen bs hsenv mg (deShadowBinds binds)
+       liftIO $ do
+         specs <- readSpecFiles
+         runMGen bs hsenv mg specs (deShadowBinds binds)
        return binds
+
+readSpecFiles :: IO [Spec]
+readSpecFiles = do specs <- getSpecFiles
+                   concat <$> mapM parseSpecFile specs
+       
+getSpecFiles :: IO [String]
+getSpecFiles = find always (extension ==? ".espec") =<< getDataDir

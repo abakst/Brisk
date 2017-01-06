@@ -53,7 +53,6 @@ isRecordSel x
       RecSelId {} -> True
       _           -> False
 
-
 builtinName :: Int -> Name
 builtinName i
   = mkSystemName (mkUnique 'b' i) (mkVarOcc (show i))
