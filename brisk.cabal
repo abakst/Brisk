@@ -21,6 +21,7 @@ data-files:        *.espec
 library
   -- build-tools:       alex, happy
   exposed-modules:   Brisk.Plugin
+                   , Brisk.UX
                    , Brisk.Transform.SpanStack
                    , Brisk.Transform.Misc
                    , Brisk.Transform.ANF
@@ -31,8 +32,12 @@ library
                    , Brisk.Model.Extract
                    , Brisk.Model.Builtins
                    , Brisk.Model.Prolog
+                   , Brisk.Model.Promela
                    , Brisk.Model.IceT
                    , Brisk.Model.GhcInterface
+                   , Control.Distributed.Process.SymmetricProcess
+                   , Control.Distributed.BriskStatic
+                   , Control.Distributed.BriskStatic.Internal
   other-modules:   Paths_brisk
 
   -- other-modules:     Brisk.UX.SpecLex
@@ -45,9 +50,11 @@ library
                      , ghc
                      , containers
                      , distributed-process
+                     , distributed-static
                      , distributed-process-client-server
                      , distributed-process-simplelocalnet
                      , distributed-process-extras
+                     , template-haskell
                      , transformers
                      , mtl
                      , pretty

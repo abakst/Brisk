@@ -8,6 +8,18 @@ GHC.Prim.void# <= {
   void
 }
 
+Control.Monad.forM <= {
+  \t m a b xs f -> $R(a, x, f x >>= \y -> return (y : a), [], xs)
+}
+
+Control.Monad.mapM <= {
+  \t m a b f xs -> $R(a, x, f x >>= \y -> return (y : a), [], xs)
+}
+
+Control.Distributed.BriskStatic.Internal.castEffect <= {
+  \a b x y -> y
+}
+
 Control.Distributed.Process.Internal.Primitives.send <= {
   \t x y -> $send(t,x,y)
 }
@@ -24,51 +36,6 @@ Control.Distributed.Process.Internal.Primitives.expect <= {
   \t -> $recv(t)
 }
 
-
-
--- Control.Distributed.Process.Symmetric.spawnSymmetric <= {
---   \nodes p -> $spawnSym(nodes, p)
--- }
--- 
--- Control.Monad.forM <= {
---   \m a b f xs -> R(f, xs) -- ==> foreach x { f x }
--- }
--- 
--- Control.Monad.mapM <= {
---   \m a b xs f -> R(f, xs) -- ==> foreach x { f x }
--- }
--- 
--- Control.Distributed.Process.match <= {
---   \a b f -> $match(a,f,b)
--- }
--- 
--- Control.Distributed.Process.receieWait <= {
---   \b ms -> $handle[b](ms)
--- }
-
-
-
--- Control.Distributed.Process.ManagedProcess.call <= {
---   \s a b pid msg->
---     $self >>= \me -> $send((@ProcessId,a),pid,(me,msg)) >> $recv(b)
--- }
-
--- Control.Distributed.Process.ManagedProcess.handleCall <= {
---   \ts ta tb f ->
---      $recv((@Control.Distributed....ProcessId,t)) >>= \msg -> return (\s ->        -> f s msg._1
---                                              >>= \(s',resp) -> $send(tb,x._0,response)
---                                              >>= \_         -> return s')
--- }
-
--- Control.Distributed.Process.ManagedProcess.serve <= {
---   \a b s0 init def -> let rec f s = $handle(def._3) >>= f in f s0
--- }
-
--- $match :: a::Type -> (a -> Process b)
--- $handle [m1,m2,m3]
--- $recv[t] ≐ $handle [$match[t] (\x. return)]
--- Match (\x -> y)
--- $handle[b]([match(a,f,b)]) ====> $recv[a] >>= f
-
--- R (\X:thing x -> spawn p >>= \pid -> (insert pid X):thing) xs
--- $spawnSym(p) >>= \pids -> R(\x -> send x foo, pids)
+Control.Distributed.Process.SymmetricProcess.spawnSymmetric <= {
+  \nodes p -> $symSpawn(nodes, p)
+}

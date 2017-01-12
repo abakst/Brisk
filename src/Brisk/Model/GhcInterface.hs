@@ -1,6 +1,6 @@
 module Brisk.Model.GhcInterface where
 
-import GHC
+import GhcPlugins
 import Var
 import Id  
 import Unique
@@ -13,6 +13,9 @@ import Finder
 import HscTypes
 import Type
 import Control.Monad
+
+import Brisk.Pretty
+import Text.PrettyPrint.HughesPJ as PP (text, (<>))
 
 -- Looking up names
 ghcVarName :: HscEnv -> String -> String -> IO Name  
@@ -62,3 +65,9 @@ resolve env binds
   = forM binds $ \(m, x, e) -> do
       n <- ghcVarName env m x
       return (n, e)
+
+instance Show Type where
+  show = showSDoc unsafeGlobalDynFlags . ppr
+  
+instance Pretty Type where
+  ppPrec z t = PP.text "@" PP.<> PP.text (show t)

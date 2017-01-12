@@ -31,12 +31,6 @@ nameId = occNameString . getOccName
 -----------------------------------------------  
 --  Specification Language (Preds, Exprs, Types)
 ----------------------------------------------- 
-data Type b = TConApp b [Type b]
-              | TApp (Type b) (Type b)
-              | TFun (Type b) (Type b)
-              | TVar b
-              deriving (Eq, Show, Functor)
-
 data Pred b a = Rel Op (Pred b a) (Pred b a)
               | PVal b [Pred b a]
               | PConst Const
@@ -57,37 +51,46 @@ data Const = CInt Int
 data Op = Eq | Le | NEq | Plus | Minus
         deriving (Eq, Show)
 
-tInt :: Type Id
-tInt = TConApp "Int" []
-
 pVar v a      = PEffect (var v a)
-pInt v i a    = (v, tInt, Rel Eq (pVar v a) (PConst (CInt i)))
+pInt v i a    = (v, intTy, Rel Eq (pVar v a) (PConst (CInt i)))
 pSingle v x a = pVar v `eSingle` pVar x a
 eSingle v e a = (v, Rel Eq (pVar v a) e)
 pExpr v o e a = (v, Rel o (pVar v a) e)
-ePlus e1 e2   = Rel Plus e1 e2
-eMinus e1 e2  = Rel Minus e1 e2
+ePlus  = Rel Plus
+eMinus = Rel Minus
 
-type Subset b a = (b, Type b, Pred b a)
+type Subset b a = (b, T.Type, Pred b a)
 data EffExpr b a =
-   EVal    (Subset b a) a                -- ^ {v | p}
- | ECon    (Type b) b [EffExpr b a] a
- | EVar    b a                          -- ^ x
- | ELam    b (EffExpr b a) a            -- ^ \x -> e
- | EApp    (EffExpr b a) (EffExpr b a) a
- | EPrRec  b b (EffExpr b a) (EffExpr b a) (EffExpr b a) a -- ^ R (\X x -> e, E, X0)
- | ERec    b  (EffExpr b a) a
- | ECase   (Type b) (EffExpr b a) [(b, [b], EffExpr b a)] (Maybe (EffExpr b a)) a
- | EType   (Type b) a
+   EVal    { valPred :: Subset b a, annot :: a }                -- ^ {v | p}
+ | ECon    { conId :: b, conArgs :: [EffExpr b a], annot :: a }
+ | EField  { fieldExp :: EffExpr b a, fieldNo :: Int, annot :: a }
+ | EVar    { varId :: b, annot :: a }                          -- ^ x
+ | ELam    { lamId :: b, lamBody :: EffExpr b a, annot :: a }            -- ^ \x -> e
+ | EApp    { appFun :: EffExpr b a, appArg :: EffExpr b a, annot :: a }
+ | EPrRec  { precAcc  :: b
+           , precNext :: b
+           , precBody :: EffExpr b a
+           , precBase :: EffExpr b a
+           , precArg  :: EffExpr b a
+           , annot :: a
+           }-- ^ R (\X x -> e, E, X0)
+ | ERec    { recId :: b, recBody :: EffExpr b a, annot :: a }
+ | ECase   { caseTy :: T.Type
+           , caseArg :: EffExpr b a
+           , caseAlts :: [(b, [b], EffExpr b a)]
+           , caseDft :: (Maybe (EffExpr b a))
+           , annot :: a
+           }
+ | EType   { typeTy :: T.Type, annot :: a }
  -- Processes
- | EProcess (Process b a) (EffExpr b a) a
- | EBind   (EffExpr b a) (EffExpr b a) a
- | EReturn (EffExpr b a) a
- | Send     (EffType b a) (EffExpr b a) (EffExpr b a) a -- ^ send(type, p, msg)
- | Recv     (EffType b a) a
- | Spawn    (Process b a) a
- | SymSpawn (EffExpr b a) (Process b a) a -- ^ symspawn(xs, p)
- | Self     a
+ | EProcess { procProc :: Process b a, procRet :: EffExpr b a, annot :: a }
+ | EBind    { bindFst :: EffExpr b a, bindSnd :: EffExpr b a, annot :: a }
+ | EReturn  { retExp :: EffExpr b a, annot :: a }
+ | Send     { sendTy :: EffType b a, sendPid :: EffExpr b a, sendMsg :: EffExpr b a, annot ::  a } -- ^ send(type, p, msg)
+ | Recv     { recvTy :: EffType b a, annot :: a }
+ | Spawn    { spawnProc :: Process b a, annot :: a }
+ | SymSpawn { symSpawnSet :: EffExpr b a, symSpawnProc :: Process b a, annot ::  a } -- ^ symspawn(xs, p)
+ | Self     { annot :: a }
    deriving (Eq, Show, Functor)
 
 type Process b a  = EffExpr b a
@@ -95,12 +98,12 @@ type EffType b a  = EffExpr b a
 type PureExpr b a = EffExpr b a
 
 -- | Convenient Syntax
-var b a     = EVar b a
-lam b e a   = ELam b e a
-app e1 e2 a = EApp e1 e2 a
-ret e a     = EReturn e a
-fix f e a   = ERec f e a
-bind m f a  = EBind m f a
+var = EVar
+lam = ELam
+app = EApp
+ret = EReturn
+fix = ERec
+bind = EBind
 x $>>$ y    = bind x y ()
 x $->$ y    = lam x y ()
 x $@$ y     = app x y ()
@@ -108,26 +111,20 @@ infixr $->$
 infixl $@$
 
 ----------------------------------------------- 
--- | Operations on Types  
------------------------------------------------ 
-ofType :: (Name -> b) -> T.Type -> Type b 
-ofType f (Tr.TyVarTy a)
-  = TVar (f . getName $ a)
-ofType f (Tr.FunTy t t')
-  = TFun (ofType f t) (ofType f t')
-ofType f (Tr.TyConApp c ts)
-  | Just (as, t) <- synTyConDefn_maybe c
-  = undefined
-  | otherwise
-  = TConApp (f . getName $ c) (ofType f <$> ts)
-ofType _ t
-  = error ("ofType: " ++ showSDoc unsafeGlobalDynFlags (ppr t))
-
------------------------------------------------ 
 -- | Operations on Expressions  
 ----------------------------------------------- 
 
 simplify :: Subst b (EffExpr b a) => EffExpr b a -> EffExpr b a
+simplify (EField e i l')
+  = case e' of
+      ECon _ as _ -> as !! i
+      _           -> EField e' i l'
+  where
+    e' = simplify e
+simplify (ERec f e l)
+  = ERec f (simplify e) l
+simplify (EPrRec x y e b xs l)
+  = EPrRec x y (simplify e) (simplify b) (simplify xs) l
 simplify (EApp (ELam b m _) e _)
   = subst b e' m'
   where
@@ -144,14 +141,14 @@ unfoldRec m@(ERec b e l)
 substAlt x a (c, bs, e) = (c, bs, subst x a e)  
 
 conEffExpr :: a -> T.Type -> DataCon -> EffExpr Id a  
-conEffExpr l t d = ECon (ofType (nameId) t) (dataConId d) [] l
+conEffExpr l t d = ECon (dataConId d) [] l
 
 apConEff :: EffExpr b a -> EffExpr b a -> EffExpr b a
-apConEff (ECon t d args l) a = ECon t d (args ++ [a]) l
+apConEff (ECon d args l) a = ECon d (args ++ [a]) l
 
 dataConId :: DataCon -> Id
 dataConId d
-  | d == unitDataCon = "#unit"
+  | d == unitDataCon = "Unit"
   | otherwise        = nameId (dataConName d)
 
 vv :: Id
@@ -169,11 +166,12 @@ instance (Pretty b, Eq b) => Pretty (EffExpr b a) where
     | v == v' = pp e
   ppPrec _ (EVal (v,t,p) _)
     = braces (pp p)
-  ppPrec _ (ECon t c [] _)
-    = pp c <+> text "::" <+> pp t
-  ppPrec _ (ECon t c as _)
-    = parens (pp c <> parens (hcat (punctuate comma (ppPrec 9 <$> as)))
-              <+> text "::" <+> pp t)
+  ppPrec _ (EField e i _)
+    = pp e <> brackets (int i)
+  ppPrec _ (ECon c [] _)
+    = pp c
+  ppPrec _ (ECon c as _)
+    = parens (pp c <> parens (hcat (punctuate comma (ppPrec 9 <$> as))))
   ppPrec z (EVar b _)
     = ppPrec z b
   ppPrec z (ECase t e es d _)
@@ -213,17 +211,12 @@ instance (Pretty b, Eq b) => Pretty (EffExpr b a) where
   ppPrec _ (Send t p m _)   = text "$send"  <> brackets (pp t) <> parens (hcat (punctuate comma [pp p, pp m]))
   ppPrec _ (Recv t _)       = text "$expect"  <> brackets (pp t)
   ppPrec _ (Spawn p _)      = text "$spawn" <> parens (parens (pp p))
+  ppPrec _ (SymSpawn xs p _)= text "$symSpawn" <> (parens (pp xs <> comma <+> pp p))
   ppPrec _ (Self _)         = text "$getSelfPid"
   ppPrec _ (EType t _)      = pp t
 
 instance Pretty Const where
   ppPrec _ (CInt i) = int i
-
-instance Pretty b => Pretty (Type b) where
-  ppPrec z (TConApp c ts)
-    = text "@" <> ppPrec 0 c <> brackets (spaces ts)
-  ppPrec z (TVar t)
-    = ppPrec z t
 
 instance (Pretty b, Pretty (EffExpr b a)) => Pretty (Pred b a) where
   ppPrec _ (Rel o p1 p2) = parens (pp p1) <+> pp o <+> parens (pp p2)
@@ -231,7 +224,7 @@ instance (Pretty b, Pretty (EffExpr b a)) => Pretty (Pred b a) where
   ppPrec _ (PVal n xs)   = parens (pp n <+> hcat (pp <$> xs))
   ppPrec _ (PEffect e)   = pp e
   ppPrec _ (PConst c)    = pp c
-  ppPrec _ (PTrue)       = text "true"
+  ppPrec _ PTrue         = text "true"
 
 instance Pretty Op where
   ppPrec _ Eq    = text "="
@@ -264,41 +257,39 @@ spacesPrec n = foldl (<+>) empty . map (ppPrec n)
 spaces :: Pretty a => [a] -> Doc
 spaces = spacesPrec 0
 
-instance Ord b => Subst b (Type b) where
-  fv (TConApp b ts)  = Set.unions (fv <$> ts)
-  fv (TApp t t')     = Set.union (fv t) (fv t')
-  fv (TFun t t')     = Set.union (fv t) (fv t')
-  fv (TVar a)        = Set.singleton a
+instance (Avoid b, Annot a, Ord b) => Subst b (EffExpr b a) where
+  fv    = fvExpr
+  subst = substExpr False
 
-  subst x t (TConApp b ts)
-    = TConApp b (subst x t <$> ts)
-  subst x t (TApp t1 t2)
-    = TApp (subst x t t1) (subst x t t2)
-  subst x t (TFun t1 t2)
-    = TFun (subst x t t1) (subst x t t2)
-  subst x t (TVar a)
-    | x == a    = t
-    | otherwise = TVar a
-
-instance Ord b => Subst b (EffExpr b a) where
-  fv a = fvExpr a
-  subst x a = go
+-- A dirty hack, but maybe not so dirty
+substExpr :: (Avoid b, Annot a, Ord b) => Bool -> b -> EffExpr b a -> EffExpr b a -> EffExpr b a
+substExpr b x a = go
     where
       go v@(EVal (b,t,p) l) = (EVal (b, t, (substPred x a p)) l)
       go v@(EVar x' _)
-        | x == x'   = a
-        | otherwise = v
-      go v@(ECon t c as l)
-        = ECon (goType t) c (go <$> as) l
+        = case a of
+            EVar y' l | x == x' && b -> EVar y' l
+            _         | x == x'      -> a
+                      | otherwise    -> v
+      go v@(ECon c as l)
+        = ECon c (go <$> as) l
+      go v@(EField e i l)
+        = EField (go e) i l
       go g@(EPrRec a b f eb e0 l)
         | x == a || x == b = g
-        | otherwise = EPrRec a b (go f) (go eb) (go e0) l
+        | otherwise = EPrRec a' b' (go f') (go eb) (go e0) l
+        where
+          (ELam a' (ELam b' f' _) _) = go (ELam a (ELam b f dummyAnnot) dummyAnnot)
       go g@(ERec f e l)
         | f == x    = g
-        | otherwise = ERec f (go e) l
+        | otherwise = ERec f (go (substExpr True f (EVar f' dummyAnnot) e)) l
+        where
+          f' = avoid (fv a) f
       go f@(ELam x' e l)
         | x == x'   = f
-        | otherwise = ELam x' (go e) l
+        | otherwise = ELam x'' (go (substExpr True x' (EVar x'' dummyAnnot) e)) l
+        where
+          x'' = avoid (fv a) x'
       go (ECase t e es d l)
         = ECase t (go e) (substAlt x a <$> es) (go <$> d) l
       go (EApp e1 e2 l)
@@ -308,33 +299,26 @@ instance Ord b => Subst b (EffExpr b a) where
       go (EBind e1 e2 l)
         = EBind (go e1) (go e2) l
       go (EProcess p e l)
-        = EProcess (subst x a p) (go e) l
+        = EProcess (substExpr b x a p) (go e) l
 
       go (Send t p m l)   = Send (go t) (go p) (go m) l
       go (Recv t l)       = Recv (go t) l
       go (Spawn p l)      = Spawn (go p) l
       go (Self l)         = Self l
-      go (SymSpawn e p l) =  SymSpawn (go e) (go p) l
+      go (SymSpawn e p l) = SymSpawn (go e) (go p) l
       go (EType t l)      = EType t l
-
-      goType t
-        | x `elem` fv t
-        = case a of
-            EType t' l -> subst x t' t
-            _        -> error "substitution with non type!"
-        | otherwise
-        = t
 
       substPred _ _ PTrue        = PTrue
       substPred x a (PVal n ps)  = PVal n (substPred x a <$> ps)
       substPred _ _ p@(PConst _) = p
       substPred x a (Rel o p1 p2) = Rel o (substPred x a p1) (substPred x a p2)
-      substPred x a (PEffect e)   = PEffect (subst x a e)
+      substPred x a (PEffect e)   = PEffect (substExpr b x a e)
 
-fvExpr :: Ord b => EffExpr b a -> Set.Set b
+fvExpr :: (Avoid b, Annot a, Ord b) => EffExpr b a -> Set.Set b
 fvExpr (EVal (b,_,p) _) = fvPred p Set.\\ Set.singleton b
 fvExpr (EVar x _)      = Set.singleton x
-fvExpr (ECon t x as _) = Set.unions (fv <$> as)
+fvExpr (ECon x as _)   = Set.unions (fv <$> as)
+fvExpr (EField e i _)  = fvExpr e
 fvExpr (ERec f e _)    = fv e Set.\\ Set.singleton f
 fvExpr (EPrRec x y f b e _) = Set.unions (fv <$> [f,b,e]) Set.\\ Set.fromList [x,y]
 fvExpr (ELam x e _)    = fv e Set.\\ Set.singleton x
@@ -353,12 +337,46 @@ fvExpr (SymSpawn e p _) = fv e `Set.union` fv p
 fvExpr (Self _)         = Set.empty
 fvExpr (EType t _)      = Set.empty
 
-fvAlts :: Ord b => (b, [b], EffExpr b a) -> Set.Set b
+fvAlts :: (Avoid b, Annot a, Ord b) => (b, [b], EffExpr b a) -> Set.Set b
 fvAlts (_, xs, e) = fv e Set.\\ (Set.fromList xs)
 
-fvPred :: Ord b => Pred b a -> Set.Set b
+fvPred :: (Avoid b, Annot a, Ord b) => Pred b a -> Set.Set b
 fvPred (PVal v ps)   = Set.unions (fvPred <$> ps) Set.\\ Set.singleton v
 fvPred (Rel _ p1 p2) = fvPred p1 `Set.union` fvPred p2
 fvPred (PEffect e)   = fv e
 fvPred PTrue         = Set.empty
 fvPred (PConst _)    = Set.empty
+
+-- caSubst :: (Annot a, Avoid b, Subst b a) => b -> EffExpr b a -> EffExpr b a -> EffExpr b a
+-- caSubst x t' e@(ELam y t a)
+--   | x == y    = e
+--   | otherwise = 
+--   where
+--     y' = avoid (fv t') y
+-- caSubst x t' (ELam y t a)
+--   = undefined
+
+-- avoidFvs :: (Annot a, Avoid b, Subst b a,  Ord b) => Set.Set b -> EffExpr b a -> EffExpr b a  
+-- avoidFvs fvs (ELam x t a)
+--   = ELam y (caSubst x (EVar y noAnnot) t) a
+--   where
+--     y = avoid fvs x
+-- avoidFvs fvs (ERec x t a)
+--   = ERec y (caSubst x (EVar y noAnnot) t) a
+--   where
+--     y = avoid fvs x
+-- avoidFvs fvs (
+
+class Avoid b where
+  avoid :: Set.Set b -> b -> b
+
+class Annot a where
+  dummyAnnot :: a
+
+instance Avoid Id where
+  avoid fvs x
+    | Set.member x fvs = avoid fvs (x ++ "'")
+    | otherwise        = x
+
+instance Annot () where
+  dummyAnnot = ()
