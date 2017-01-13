@@ -90,6 +90,8 @@ runMGen bs hsenv mg specs prog
            binds' = (runIceT <$>) <$> binds
        dumpBinds binds
        forM_ binds' $ \(x, e) ->
+         putStrLn (show x ++ " :=\n" ++ ppShow e)
+       forM_ binds' $ \(x, e) ->
          putStrLn (show x ++ " :=\n" ++ runPromela e)
   where
     go :: EffMap -> CoreProgram -> MGen EffMap

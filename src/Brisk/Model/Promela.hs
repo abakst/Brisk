@@ -30,21 +30,78 @@ runPromela :: (HasType a, Show a)
            => [IceT.IceTProcess a]
            -> String
 ---------------------------------------------------
-runPromela ps = evalState (promelaProcs ps) state0
-  where state0 = PS { procs      = []
-                    , symProcs   = []
+runPromela ps = unlines $ [ recvMacro n
+                          , sendMacro n
+                          , channels  n (typeMap st)
+                          ]
+                       ++ [initProc pps p0]
+             -- ++ procs pps
+  where state0 = PS { procs      = [ p | IceT.Single p _    <- ps ]
+                    , symProcs   = [ p | IceT.ParIter _ p _ <- ps ]
                     , typeMap    = []
                     , procMap    = []
                     , tmp        = 0
                     , whileStack = []
                     }
+        (p0:pps, st) = runState (promelaProcs ps) state0
+        n            = length (procs st)
+
+initProc pps (Concr pid0, p0)
+  = unlines $ [ "init {"
+              , printf "%s = _pid;" pid0
+              ]
+           ++ [ runProc p | (p,_) <- pps ]
+           ++ [ p0 ]
+           ++ [ "}" ]
+  where
+    runProc (Concr p) = printf "%s = run %s();" p (procName p)
+
+procName :: String -> String
+procName p = printf "proc_%s" p
+
+---------------------------------------------------
+channels :: Int -> [(Type,Int)] -> String
+---------------------------------------------------
+channels nProcs tys
+  = unlines (go <$> tys)
+  where
+    go (_, ti)
+      = printf "chan chan_%s[%d] = [__K__] of { %s }"
+                ("T" ++ show ti)
+                (nProcs * nProcs)
+                ("T" ++ show ti)
+
+---------------------------------------------------
+sendMacro, recvMacro :: Int -> String
+---------------------------------------------------
+recvMacro n
+  = unlines $ [ "#define __RECV__(_ty, _x) atomic { _ty _x; if \\" ]
+           ++ (tycase <$> [0..n-1])
+           ++ [ "fi }" ]
+  where
+    tycase = printf ":: chan_##_ty[%d*%d + _pid]?_x\\" n
+
+sendMacro
+  = printf "#define __SEND__(_ty,_to,_msg) { chan_##_ty[%d*_pid + _to]!_msg }"
+
+-- #define __RECV__(ty,from) \
+-- if
+--    :: chan_ty[pid0*N + _pid]?x
+--    :: chan_ty[pid1*N + _pid]?x
+--    :: chan_ty[pid2*N + _pid]?x
+--    ...
+-- fi
+-- ...
+
 
 ---------------------------------------------------
 promelaProcs :: (HasType a, Show a)
-             => [IceT.IceTProcess a] -> PM String
+             => [IceT.IceTProcess a] -> PM [(Proc, String)]
 ---------------------------------------------------
 promelaProcs ps
-  = unlines <$> forM ps (uncurry promelaProc . go)
+  = forM ps $ \p -> do
+      pr <- uncurry promelaProc (go p)
+      return (fst (go p), pr)
   where
     go (IceT.Single p s)     = (Concr p, s)
     go (IceT.ParIter p ps s) = (SymSet p ps, s)
@@ -68,7 +125,7 @@ promelaProc pid (IceT.Recv t x)
 promelaProc pid (IceT.Send _ p m)
   = do ty  <- typeId (getType m)
        msg <- promelaExpr m
-       to  <- promelaPid pid
+       to  <- promelaExpr p
        return $ send ty to msg
 
 promelaProc pid (IceT.Seq ss)
@@ -112,8 +169,11 @@ promelaCase pid e alts md
        return $ unwords (pAlts ++ pDef)
   where
     go :: (Show a, HasType a) => (IceTExpr a, IceTStmt a) -> PM (String, String)
-    go (e',s) = do s' <- promelaProc pid s
-                   return (cond e', printf ":: %s -> %s" (top [cond e']) s')
+    go (e',s)
+      = do s' <- promelaProc pid s
+           let patBinds = exprPatBinds e'
+               body     = unwords (((++"; ") <$> patBinds) ++ [s'])
+           return (cond e', printf ":: %s -> %s" (top [cond e']) body)
 
     goDef _ Nothing   = return []
     goDef cs (Just s) = do s' <- promelaProc pid s
@@ -126,6 +186,8 @@ promelaCase pid e alts md
     top :: [String] -> String
     top = foldl (printf "%s || %s") (printf "%s.top == 1" (varId e))
 
+exprPatBinds (ECon c as _)
+  = undefined
 
 promelaExpr :: (Show a, HasType a)
             => IceTExpr a -> PM String
