@@ -1,4 +1,3 @@
-{-# LANGUAGE OverlappingInstances #-}
 {-# LANGUAGE FlexibleContexts #-}
 module Brisk.Model.Spec where
 

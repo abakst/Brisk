@@ -22,7 +22,7 @@ import           Brisk.Model.GhcInterface
 import           Brisk.Model.Types
 import           Brisk.Model.Spec
 import           Brisk.Model.Builtins
--- import           Brisk.Model.Prolog
+import           Brisk.Model.Prolog
 import           Brisk.Model.Promela
 import           Brisk.Model.IceT (runIceT, HasType(..))
 import           Brisk.Pretty
@@ -91,8 +91,10 @@ runMGen bs hsenv mg specs prog
        dumpBinds binds
        forM_ binds' $ \(x, e) ->
          putStrLn (show x ++ " :=\n" ++ ppShow e)
-       forM_ binds' $ \(x, e) ->
-         putStrLn (show x ++ " :=\n" ++ runPromela e)
+       -- forM_ binds' $ \(x, e) ->
+       --   putStrLn (show x ++ " :=\n" ++ runPromela e)
+       forM_ binds $ 
+         putStrLn . toBriskString . snd
   where
     go :: EffMap -> CoreProgram -> MGen EffMap
     go                     = foldM mGenBind

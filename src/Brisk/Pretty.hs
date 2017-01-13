@@ -1,6 +1,5 @@
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeSynonymInstances #-}
-{-# LANGUAGE OverlappingInstances #-}
 module Brisk.Pretty (
     render
   , text
@@ -19,7 +18,7 @@ class Pretty a where
 instance Pretty String where
   ppPrec _ = text
 
-instance Pretty a => Pretty [a] where
+instance {-# OVERLAPPABLE #-} Pretty a => Pretty [a] where
   ppPrec z l = brackets (vcat (ppPrec z <$> l))
 
 parensIf :: Bool -> Doc -> Doc

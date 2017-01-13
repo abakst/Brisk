@@ -13,36 +13,49 @@ import           Brisk.Model.Types (Id)
 import           Brisk.Model.IceT
 import           Brisk.Model.GhcInterface
 import           Brisk.Pretty
+import           Brisk.UX
 import qualified GhcPlugins as GT
 
+---------------------------------------------------
 toBriskString :: (Show a, HasType a) => T.EffExpr T.Id a -> String
+---------------------------------------------------
 toBriskString = render . toBrisk                 
 
+---------------------------------------------------
 toBrisk :: (Show a, HasType a) => T.EffExpr T.Id a -> Doc
+---------------------------------------------------
 toBrisk e = fromIceT (runIceT e)
 
-fromIceT :: [IceTProcess a] -> Doc
+---------------------------------------------------
+fromIceT :: (Show a, HasType a) => [IceTProcess a] -> Doc
+---------------------------------------------------
 fromIceT ps
   = mkPar (fromIceTProcess <$> ps)
 
+---------------------------------------------------
+fromIceTProcess :: (Show a, HasType a) => IceTProcess a -> Doc
+---------------------------------------------------
 fromIceTProcess (Single pid stmt)
   = fromIceTStmt pid stmt
-fromIceTProcess (ParIter pidset pid stmt)
-  = undefined
+fromIceTProcess (ParIter pid pidset stmt)
+  = mkSym (prolog pid) (mkPidSet pidset) (fromIceTStmt pid stmt)
 
-fromIceTStmt :: ProcessId -> IceTStmt a -> Doc
+---------------------------------------------------
+fromIceTStmt :: (Show a, HasType a) => ProcessId -> IceTStmt a -> Doc
+---------------------------------------------------
 fromIceTStmt pid s@(Seq _)
   = mkSeq (fromIceTStmt pid <$> ss)
   where
     (Seq ss) = flattenSeq s
-fromIceTStmt pid (Send ty p m)
-  = mkSend (prolog pid) [ prolog ty
-                        , fromIceTPid  pid p
+
+fromIceTStmt pid (Send _ p m)
+  = mkSend (prolog pid) [ prolog (getType m)
+                        , fromIceTPid  p
                         , fromIceTExpr pid m
                         ]
-  where
 fromIceTStmt pid Skip
   = mkSkip
+
 fromIceTStmt pid (Recv ty my)
   = mkRecv (prolog pid) [ mkType [prolog ty]
                         , y
@@ -52,14 +65,40 @@ fromIceTStmt pid (Recv ty my)
           Nothing -> prolog "nil"
           Just y  -> prolog y
 
-fromIceTStmt pid (Case e cases _)
-  = mkCases (prolog pid) (fromIceTExpr pid e) (goCase <$> cases)
-  where
-    goCase (e, s)
-      = mkCase (prolog pid) (fromIceTExpr pid e) (fromIceTStmt pid s)
+fromIceTStmt pid (Assgn x _ e)
+  = mkAssign (prolog pid) [prolog x, fromIceTExpr pid e]
 
-fromIceTPid _ (T.EVar v l)
+fromIceTStmt pid (Case e cases d)
+  = mkCases (prolog pid) (fromIceTExpr pid e) pCases 
+  where
+    pCases
+      = (goCase <$> cases) ++ defaultCase
+    goCase (e, s)
+      = mkCase ppid (fromIceTExpr pid e) (fromIceTStmt pid s)
+    defaultCase
+      = maybe [] (return . mkDefaultCase ppid . fromIceTStmt pid) d
+    ppid = prolog pid
+
+fromIceTStmt pid (While s)    
+  = mkWhile (prolog pid) [fromIceTStmt pid s]
+
+fromIceTStmt pid Continue
+  = mkContinue
+
+fromIceTStmt pid (ForEach x xs s)
+  = mkForEach (prolog pid) [ prolog x
+                           , fromIceTPidSet xs
+                           , fromIceTStmt pid s
+                           ]
+
+fromIceTStmt _ s
+  = abort "Prolog.fromIceTStmt" s
+
+fromIceTPid (T.EVar v l)
   = prologPid v
+
+fromIceTPidSet (T.EVar v _)
+  = mkPidSet v
 
 fromIceTExpr _ (T.EVar v l)
   = prolog v
@@ -68,8 +107,17 @@ fromIceTExpr _ (T.EType t _)
 fromIceTExpr pid (T.ECon c es _)
   = compoundTerm c (fromIceTExpr pid <$> es)
 
+mkPidSet (s0:s)  
+  = compoundTerm "set" [prolog (toLower s0 : s)]
+
+mkSym :: Doc -> Doc -> Doc -> Doc
+mkSym p set act = compoundTerm "sym" [p,set,act]
+
 mkSeq :: [Doc] -> Doc
 mkSeq ds = compoundTerm "seq" [listTerms ds]
+
+mkAssign :: Doc -> [Doc] -> Doc
+mkAssign = mkAction "assign" 2
 
 mkPar :: [Doc] -> Doc
 mkPar ds = compoundTerm "par" [listTerms ds]
@@ -86,14 +134,29 @@ mkRecv = mkAction "recv" 2
 mkSkip :: Doc
 mkSkip = prolog "skip"
 
+mkContinue :: Doc
+mkContinue = prolog "continue"
+
+mkWhile :: Doc -> [Doc] -> Doc  
+mkWhile = mkAction "while" 1
+
+mkForEach :: Doc -> [Doc] -> Doc
+mkForEach = mkAction "for" 3
+
 mkCases :: Doc -> Doc -> [Doc] -> Doc
-mkCases pid x cases = compoundTerm "cases" ([pid, x, listTerms cases])
+mkCases pid x cases = compoundTerm "cases" [pid, x, listTerms cases]
 
 mkCase :: Doc -> Doc -> Doc -> Doc
 mkCase pid e s = compoundTerm "case" [pid, e, s]
 
+mkDefaultCase :: Doc -> Doc -> Doc
+mkDefaultCase pid s = compoundTerm "case" [ pid
+                                          , compoundTerm "default" []
+                                          , s
+                                          ]
+
 mkAction f n pid args
-  = compoundTerm f (pid:(checkLen n args))
+  = compoundTerm f (pid : checkLen n args)
 
 checkLen n ds
   = assert (length ds == n) ds
@@ -105,14 +168,11 @@ atom = prolog
 --
 ---------
 
-
 listTerms :: [Doc] -> Doc
-listTerms ds
-  = brackets . hcat . punctuate comma $ ds
+listTerms = brackets . hcat . punctuate comma
 
 tupleTerms :: [Doc] -> Doc
-tupleTerms ds
-  = parens . hcat . punctuate comma $ ds
+tupleTerms = parens . hcat . punctuate comma
 
 compoundTerm :: String -> [Doc] -> Doc
 compoundTerm n ds
@@ -125,9 +185,9 @@ class Prolog a where
 instance Prolog String where
   prolog = text
 
-  prologPid (s:ss)
-    | isUpper s = compoundTerm "e_pid" [text (toLower s : ss)]
-    | otherwise = compoundTerm "e_var" [text (s:ss)]
+  prologPid pid@(s:_)
+    | isUpper s = compoundTerm "e_pid" [text pid]
+    | otherwise = compoundTerm "e_var" [text pid]
 
 instance Prolog GT.Type where
   prolog t = text $ GT.showSDoc GT.unsafeGlobalDynFlags (GT.ppr t)
