@@ -169,7 +169,10 @@ atom = prolog
 ---------
 
 listTerms :: [Doc] -> Doc
-listTerms = brackets . hcat . punctuate comma
+listTerms = brackets
+          . (space <>)
+          . vcat
+          . punctuate (comma <> space)
 
 tupleTerms :: [Doc] -> Doc
 tupleTerms = parens . hcat . punctuate comma
