@@ -12,7 +12,6 @@ import Data.Function
 import Data.List
 import Data.Maybe
 import PrelNames
-import Control.Exception (catch, ErrorCall(..))
 import Text.Show.Pretty (ppShow)
 
 import qualified Data.Set as Set
@@ -104,7 +103,9 @@ runMGen bs hsenv mg specs prog
 dumpBinds :: [(Id, AbsEff)] -> IO ()
 dumpBinds binds
   = forM_ binds $ \(k,v) ->
-      putStrLn (render (pp k <+> text ":=" <+> PP.vcat [pp v, text (ppShow v)]))
+      putStrLn (render (pp k <+> text ":=" <+> PP.vcat [ pp v
+                                                       -- , text (ppShow v)
+                                                       ]))
 
 bindId :: NamedThing a => a -> Id
 bindId = nameId . getName

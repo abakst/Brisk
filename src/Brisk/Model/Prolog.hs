@@ -100,12 +100,27 @@ fromIceTPid (T.EVar v l)
 fromIceTPidSet (T.EVar v _)
   = mkPidSet v
 
+---------------------------------------------------
+fromIceTExpr :: (Show a, HasType a) => ProcessId -> IceTExpr a -> Doc
+---------------------------------------------------
 fromIceTExpr _ (T.EVar v l)
   = prolog v
 fromIceTExpr _ (T.EType t _)
   = prolog t
 fromIceTExpr pid (T.ECon c es _)
   = compoundTerm c (fromIceTExpr pid <$> es)
+fromIceTExpr pid (T.ECase t e alts d l)
+  = mkCases (prolog pid) (fromIceTExpr pid e) cases
+  where
+    cases
+      = (goCase <$> alts) ++
+        maybe [] (return . mkDefaultCase ppid . fromIceTExpr pid) d
+    goCase (c,xs,e)
+      = mkCase ppid (fromIceTExpr pid (T.ECon c (flip T.EVar l <$> xs) l))
+                    (fromIceTExpr pid e)
+    ppid = prolog pid
+fromIceTExpr pid e
+  = abort "fromIceTExpr" e
 
 mkPidSet (s0:s)  
   = compoundTerm "set" [prolog (toLower s0 : s)]

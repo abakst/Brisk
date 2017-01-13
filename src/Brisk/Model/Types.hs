@@ -24,9 +24,6 @@ import qualified TypeRep as Tr
 
 type Id = String                 
 
-nameId :: Name -> String
-nameId = occNameString . getOccName
-
 
 -----------------------------------------------  
 --  Specification Language (Preds, Exprs, Types)

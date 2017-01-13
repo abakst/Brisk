@@ -66,8 +66,21 @@ resolve env binds
       n <- ghcVarName env m x
       return (n, e)
 
+nameId :: Name -> String
+nameId n = briskShowPpr $ concatFS [occFS, uniqFS] 
+  where
+    occFS = occNameFS (getOccName n)
+    uniqFS
+       | isSystemName n
+       = concatFS [fsLit "_",  fsLit (briskShowPpr (getUnique n))]
+       | otherwise
+       = fsLit ""
+
 instance Show Type where
   show = showSDoc unsafeGlobalDynFlags . ppr
   
 instance Pretty Type where
   ppPrec z t = PP.text "@" PP.<> PP.text (show t)
+
+briskShowPpr :: Outputable a => a -> String
+briskShowPpr = showSDoc unsafeGlobalDynFlags . ppr

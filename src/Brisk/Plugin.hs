@@ -5,6 +5,7 @@ import System.FilePath.Find
 import Paths_brisk
 import Brisk.Model.Extract
 import Brisk.Model.Spec
+import Control.Exception
 
 plugin = briskPlugin       
 
@@ -26,10 +27,15 @@ briskPass bs guts
 runBrisk :: [String] -> ModGuts -> CoreProgram -> CoreM CoreProgram   
 runBrisk bs mg binds 
   = do hsenv <- getHscEnv
-       liftIO $ do
+       liftIO $ withExceptions $ do
          specs <- readSpecFiles
          runMGen bs hsenv mg specs (deShadowBinds binds)
        return binds
+         where
+           withExceptions act
+             = catch act handleUserError
+           handleUserError e@(ErrorCall _)
+             = putStrLn (displayException e) 
 
 readSpecFiles :: IO [Spec]
 readSpecFiles = do specs <- getSpecFiles
