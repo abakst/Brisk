@@ -39,3 +39,29 @@ Control.Distributed.Process.Internal.Primitives.expect <= {
 Control.Distributed.Process.SymmetricProcess.spawnSymmetric <= {
   \nodes p -> $symSpawn(nodes, p)
 }
+
+Control.Distributed.Process.ManagedProcess.serve <= {
+  \t0 t1 s0 initFn p ->
+    let rec loop = \st -> (((p[0])[0]) st >>= (\st' -> loop st'))
+    in loop s0
+}
+
+
+Control.Distributed.Process.ManagedProcess.defaultProcess <= {
+  \t0 ->
+     Control.Distributed.Process.ManagedProcess.Internal.Types.ProcessDefinition
+       [] [] [] (\s -> s) (\s t -> s) Terminate
+}
+
+Control.Distributed.Process.ManagedProcess.Server.handleCall <= {
+  \ts tmsg tresp fn st -> $recv((Control.Distributed.Process.Internal.Types.ProcessId, tmsg))
+                      >>= (\msg -> (fn st (msg[1]) (msg[0])))
+}
+
+Control.Distributed.Process.ManagedProcess.Server.reply <= {
+  \r s -> \msg st p -> $send(r, p, msg) >>= (\x -> return st)
+}
+
+Control.Distributed.Process.ManagedProcess.Client.call <= {
+  \ts ta tb p msg -> ($self >>= \me -> $send((Control.Distributed.Process.Internal.Types.ProcessId, ta), p, (Pair me msg)) >>= \r0 -> $recv(tb))
+}

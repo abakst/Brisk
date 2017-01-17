@@ -1,6 +1,9 @@
 {-# LANGUAGE FlexibleContexts #-}
 module Brisk.Model.Spec where
 
+import GhcPlugins (mkModuleName, ModGuts)
+import HscMain (hscImport)
+import Control.Monad.State.Class
 import Data.Char
 import Data.Functor.Identity
 import Control.Monad.Trans
@@ -17,6 +20,11 @@ import Text.Parsec.Expr as PE
 import Text.ParserCombinators.Parsec.Expr
 import qualified Text.ParserCombinators.Parsec.Token as Token
 import Text.ParserCombinators.Parsec.Language
+import GhcPlugins (HscEnv, ModuleName)
+import Brisk.Model.GhcInterface hiding (text, (<>), (<+>))
+import Type
+import TysWiredIn
+import BasicTypes
 
 {-
 module spec Word where
@@ -39,7 +47,7 @@ instance Pretty Spec where
 
 type BareExpr = EffExpr Id ()
 
-type EffParser a = ParsecT String () IO a
+type EffParser a = ParsecT String (HscEnv, ModGuts) IO a
 
 testParse (Left  s) = text (show s)
 testParse (Right f) = pp f                   
@@ -52,7 +60,7 @@ reserved_ = [ "in"
            , "$symSpawn"
            ]
 
-lexer :: Token.GenTokenParser String () IO
+lexer :: Token.GenTokenParser String a IO
 lexer    = Token.makeTokenParser
                     haskellDef {
                           reservedNames = reserved_
@@ -68,11 +76,13 @@ ioIfy :: (Stream s Identity t)
       -> ParsecT s u IO a
 ioIfy p = mkPT $ \u -> go $ runIdentity (runParsecT p u)
   where
-    go :: Consumed (Identity a) -> IO (Consumed (IO a))
     go (Consumed v) = return (Consumed (return (runIdentity v)))
     go (Empty v)    = return (Empty (return (runIdentity v)))
 
+reserved :: String -> EffParser ()
 reserved   = Token.reserved lexer
+
+reservedOp :: String -> EffParser ()
 reservedOp = Token.reservedOp lexer
 
 ident :: EffParser String
@@ -84,20 +94,23 @@ symbol = Token.symbol lexer
 parens :: EffParser a -> EffParser a
 parens = Token.parens lexer
 
+brackets :: EffParser a -> EffParser a
 brackets = Token.brackets lexer
 
 comma :: EffParser String
 comma  = Token.comma lexer
 
 -- X.Y.Bar <=  << eff >>
-parseSpecFile :: String -> IO [Spec]
-parseSpecFile fn = do input <- readFile fn
-                      specs <- runParserT (specFile <* eof) () fn input
-                      report specs
+parseSpecFile :: HscEnv -> ModGuts -> String -> IO [Spec]
+parseSpecFile env mg fn
+  = do input <- liftIO $ readFile fn
+       specs <- runParserT (specFile <* eof) (env, mg) fn input
+       report specs
   where
     report (Left e)  = error (show e)
     report (Right s) = return s
 
+name :: EffParser String
 name = Token.operator lexer <|> ident
 
 specFile :: EffParser [Spec]
@@ -106,6 +119,8 @@ specFile = do reserved "module"
               i <- name `sepBy1` Token.dot lexer
               reserved "where"
               many specLine
+
+specLine :: EffParser Spec
 specLine = do i <- name `sepBy1` Token.dot lexer
               let mod = init i
                   id  = last i
@@ -168,6 +183,30 @@ effRec = do reserved "let"
             let foo = (ERec i e ())
             return foo
 
+effType :: EffParser Type            
+effType =  try ghcPairType
+       <|> do qualt <- qualIdent
+              (env, mg) <- getState
+              if isLower ((qualt !! 0) !! 0) then
+                return (mkTyVarTy (mkTyVar (qualt !! 0)))
+              else
+                let mod = intercalate "." (init qualt)
+                    t   = last qualt
+                in liftIO $ mkTyConTy <$> ghcFindTy env mg mod t
+  where
+    ghcPairType
+      = parens $ do
+         t1 <- effType
+         comma
+         t2 <- effType
+         return (mkTupleTy BoxedTuple [t1,t2])
+
+tyVar = try $ do i <- ident
+                 if isLower (i !! 0) then
+                   return (mkTyVarTy (mkTyVar i))
+                 else
+                   fail "tyVar"
+
 effPrRec :: EffParser BareExpr
 effPrRec = do reserved "$R"
               parens $ do
@@ -190,11 +229,16 @@ effProcess = try send
          <|> try symSpawn
   where
     send = do reserved "$send"
-              (t,p,m) <- triple effExpr
-              return (Send t p m ())
+              parens $ do
+                t <- effType
+                comma
+                p <- effExpr
+                comma
+                m <- effExpr
+                return (Send (EType t ()) p m ())
     recv = do reserved "$recv"
-              t <- parens effExpr
-              return (Recv t ())
+              ty <- parens effType
+              return (Recv (EType ty ()) ())
     spawn = do reserved "$spawn"
                p <- parens effExpr
                return (Spawn p ())
@@ -224,13 +268,16 @@ triple p = parens $ do
   e3 <- p
   return (e1, e2, e3)
 
+qualIdent :: EffParser [String]
+qualIdent = sepBy1 ident (symbol ".")
+
 effReturn :: EffParser BareExpr
 effReturn = do reserved "return"
                e <- effExpr
                return (EReturn e ())
 
 effVar :: EffParser BareExpr
-effVar = flip EVar () <$> ident
+effVar = flip EVar () . intercalate "." <$> qualIdent
 
 effLam :: EffParser BareExpr
 effLam = do symbol "\\"
@@ -251,7 +298,7 @@ effApp :: EffParser BareExpr
 effApp = do e:es <- many1 effExpr''
             return $
               case e of
-                -- EVar c _ | isUpper (c !! 0) -> ECon c es ()
+                EVar c _ | isUpper (c !! 0) -> ECon c es ()
                 _                           -> foldl' go e es
                 where
                   go e e' = EApp e e' ()

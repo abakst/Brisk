@@ -91,9 +91,6 @@ fromIceTStmt pid (ForEach x xs s)
                            , fromIceTStmt pid s
                            ]
 
-fromIceTStmt _ s
-  = abort "Prolog.fromIceTStmt" s
-
 fromIceTPid (T.EVar v l)
   = prologPid v
 
@@ -119,11 +116,16 @@ fromIceTExpr pid (T.ECase t e alts d l)
       = mkCase ppid (fromIceTExpr pid (T.ECon c (flip T.EVar l <$> xs) l))
                     (fromIceTExpr pid e)
     ppid = prolog pid
+fromIceTExpr pid (T.EField e i _)
+  = mkField (prolog pid) [fromIceTExpr pid e, prolog i]
 fromIceTExpr pid e
   = abort "fromIceTExpr" e
 
 mkPidSet (s0:s)  
   = compoundTerm "set" [prolog (toLower s0 : s)]
+
+mkField :: Doc -> [Doc] -> Doc
+mkField = mkAction "field" 2
 
 mkSym :: Doc -> Doc -> Doc -> Doc
 mkSym p set act = compoundTerm "sym" [p,set,act]
@@ -187,10 +189,10 @@ listTerms :: [Doc] -> Doc
 listTerms = brackets
           . (space <>)
           . vcat
-          . punctuate (comma <> space)
+          . punctuate (comma<>space)
 
 tupleTerms :: [Doc] -> Doc
-tupleTerms = parens . hcat . punctuate comma
+tupleTerms = parens . hcat . punctuate (comma<>space)
 
 compoundTerm :: String -> [Doc] -> Doc
 compoundTerm n ds
@@ -206,6 +208,10 @@ instance Prolog String where
   prologPid pid@(s:_)
     | isUpper s = compoundTerm "e_pid" [text pid]
     | otherwise = compoundTerm "e_var" [text pid]
+
+instance Prolog Int where
+  prolog    = int
+  prologPid = abort "prologPid" "prologPid of Int"
 
 instance Prolog GT.Type where
   prolog t = text $ GT.showSDoc GT.unsafeGlobalDynFlags (GT.ppr t)

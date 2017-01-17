@@ -3,7 +3,8 @@
 {-# LANGUAGE UndecidableInstances #-}
 module Brisk.Model.Extract where
 
-import GhcPlugins          hiding ((<+>), pp, text, Subst, Id)
+import GHC (GhcMonad)
+import GhcPlugins          hiding ((<+>), pp, text, Subst, Id, mkTyVar)
 import Type                as Ty
 import Name
 import Control.Monad.Trans.State
@@ -54,6 +55,9 @@ instance HasType TyAnnot where
   getType         = fromJust . fst
   setType t (_,l) = (Just t,l)
 
+instance ToTyVar Id where
+  toTyVar = mkTyVar
+
 pushSpan :: RealSrcSpan -> MGen ()              
 pushSpan ss = modify $ \s -> s { srcSpans = RealSrcSpan ss : srcSpans s }
 
@@ -77,9 +81,7 @@ annotType e t = t { annot = a }
 runMGen :: [String] -> HscEnv -> ModGuts -> [Spec] -> CoreProgram -> IO ()
 runMGen bs hsenv mg specs prog
   = do initBinds <- resolve hsenv (specTuple <$> specs)
-       let
-         g0 :: EffMap
-         g0    = Env.addsEnv Env.empty [ (nameId x, noAnnot b) | (x,b) <- initBinds ]
+       let g0    = Env.addsEnv Env.empty [ (nameId x, noAnnot b) | (x,b) <- initBinds ]
        procTy    <- ghcTyName hsenv "Control.Distributed.Process.Internal.Types" "Process"
        g         <- evalStateT (go g0 prog) (initialEState hsenv mg procTy)
        ns        <- forM bs findModuleNameId
@@ -88,8 +90,8 @@ runMGen bs hsenv mg specs prog
                      else filter ((`elem` ns) . fst) (Env.toList g)
            binds' = (runIceT <$>) <$> binds
        dumpBinds binds
-       forM_ binds' $ \(x, e) ->
-         putStrLn (show x ++ " :=\n" ++ ppShow e)
+       -- forM_ binds' $ \(x, e) ->
+       --   putStrLn (show x ++ " :=\n" ++ ppShow e)
        -- forM_ binds' $ \(x, e) ->
        --   putStrLn (show x ++ " :=\n" ++ runPromela e)
        forM_ binds $ 

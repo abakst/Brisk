@@ -3,11 +3,13 @@
 {-# Language UndecidableInstances #-}
 {-# Language FlexibleInstances #-}
 {-# Language FlexibleContexts #-}
+{-# Language ScopedTypeVariables #-}
 {-# Language GADTs #-}
 module Brisk.Model.Types where
 
 import GhcPlugins (showSDoc, unsafeGlobalDynFlags, ppr)
 import Brisk.Pretty
+import Brisk.UX
 import Brisk.Model.GhcInterface
 import Text.PrettyPrint.HughesPJ
 import Unique
@@ -110,8 +112,28 @@ infixl $@$
 ----------------------------------------------- 
 -- | Operations on Expressions  
 ----------------------------------------------- 
+substs :: Subst b (EffExpr b a)
+       => [b]
+       -> [EffExpr b a]
+       -> EffExpr b a
+       -> EffExpr b a
+substs froms tos e
+  = foldl go e (zip froms tos)
+  where
+    go e (x,a) = subst x a e
 
-simplify :: Subst b (EffExpr b a) => EffExpr b a -> EffExpr b a
+simplify :: (Show a, Show b, Subst b (EffExpr b a)) => EffExpr b a -> EffExpr b a
+simplify (ECase t e alts md l)
+  = case (e, alts) of
+      (ECon c xs _, [(c', xs', eAlt)])
+        | c == c' && length xs == length xs'
+          -> substs xs' xs eAlt
+      _   -> ECase t e' alts' md' l
+  where
+    e'    = simplify e
+    alts' = map (\(x,y,z) -> (x,y,simplify z)) alts
+    md'   = simplify <$> md
+    
 simplify (EField e i l')
   = case e' of
       ECon _ as _ -> as !! i
@@ -122,14 +144,42 @@ simplify (ERec f e l)
   = ERec f (simplify e) l
 simplify (EPrRec x y e b xs l)
   = EPrRec x y (simplify e) (simplify b) (simplify xs) l
-simplify (EApp (ELam b m _) e _)
-  = subst b e' m'
+simplify (EApp e1 e2 l)
+  = case e1' of
+      ELam b m _           -> subst b e2' m
+      ECase t e alts md l' -> simplifyCaseApp t e alts md l' e2' l
+      _                    -> EApp e1' e2' l
   where
-    e' = simplify e
-    m' = simplify m
-simplify (EApp e1 e2 l)  = EApp (simplify e1) (simplify e2) l
+    e1' = simplify e1
+    e2' = simplify e2 
 simplify (EBind e1 e2 l) = EBind (simplify e1) (simplify e2) l
-simplify e = e
+simplify (ECon c xs l)   = ECon c (simplify <$> xs) l
+simplify (ELam b e l)    = ELam b (simplify e) l
+simplify (EReturn e l)   = EReturn (simplify e) l
+simplify (Send t p m l)  = Send t (simplify p) (simplify m) l
+simplify r@Recv{}        = r
+simplify t@EType{}       = t
+simplify x@EVar{}        = x
+simplify s@Self{}        = s
+simplify e = abort "simplify" e
+
+simplifyCaseApp :: forall a b. (Show a, Show b, Subst b (EffExpr b a))
+                => Tr.Type
+                -> EffExpr b a
+                -> [(b, [b], EffExpr b a)]
+                -> Maybe (EffExpr b a)
+                -> a
+                -> EffExpr b a
+                -> a
+                -> EffExpr b a
+simplifyCaseApp t caseE alts md l e' l'  
+  = ECase t caseE (goAlt <$> alts) (go <$> md) l
+  -- | otherwise
+  -- = EApp (ECase t e alts md l) e' l'
+  where
+    goAlt (c,xs,e) = (c,xs,go e)
+    go    e        = simplify $ EApp e e' l
+
 
 unfoldRec :: Subst b (EffExpr b a) => EffExpr b a -> EffExpr b a
 unfoldRec m@(ERec b e l)
@@ -146,7 +196,7 @@ apConEff (ECon d args l) a = ECon d (args ++ [a]) l
 dataConId :: DataCon -> Id
 dataConId d
   | d == unitDataCon = "Unit"
-  | otherwise        = nameId (dataConName d)
+  | otherwise        = nameId (getName d)
 
 vv :: Id
 vv = "#vv"
@@ -155,8 +205,11 @@ exprString :: Pretty (EffExpr b a) => EffExpr b a -> String
 exprString e = render (pp e)
 
 class Ord b => Subst b a where
-  subst :: b -> a -> a -> a
-  fv    :: a -> Set.Set b 
+  subst   :: b -> a -> a -> a
+  fv      :: a -> Set.Set b 
+
+class ToTyVar b where
+  toTyVar :: b -> T.TyVar
 
 instance (Pretty b, Eq b) => Pretty (EffExpr b a) where
   ppPrec _ (EVal (v,t,Rel Eq (PEffect (EVar v' _)) e) _)
@@ -254,12 +307,13 @@ spacesPrec n = foldl (<+>) empty . map (ppPrec n)
 spaces :: Pretty a => [a] -> Doc
 spaces = spacesPrec 0
 
-instance (Avoid b, Annot a, Ord b) => Subst b (EffExpr b a) where
+instance (Avoid b, Annot a, ToTyVar b, Ord b) => Subst b (EffExpr b a) where
   fv    = fvExpr
   subst = substExpr False
 
 -- A dirty hack, but maybe not so dirty
-substExpr :: (Avoid b, Annot a, Ord b) => Bool -> b -> EffExpr b a -> EffExpr b a -> EffExpr b a
+substExpr :: (Avoid b, Annot a, ToTyVar b,  Ord b)
+          => Bool -> b -> EffExpr b a -> EffExpr b a -> EffExpr b a
 substExpr b x a = go
     where
       go v@(EVal (b,t,p) l) = (EVal (b, t, (substPred x a p)) l)
@@ -303,7 +357,12 @@ substExpr b x a = go
       go (Spawn p l)      = Spawn (go p) l
       go (Self l)         = Self l
       go (SymSpawn e p l) = SymSpawn (go e) (go p) l
-      go (EType t l)      = EType t l
+      go ty@(EType t l)
+        = case a of
+            EType t' l' -> EType (T.substTy tysubst t) l
+              where
+                tysubst = T.zipOpenTvSubst [toTyVar x] [t']
+            _           -> ty
 
       substPred _ _ PTrue        = PTrue
       substPred x a (PVal n ps)  = PVal n (substPred x a <$> ps)
@@ -311,7 +370,7 @@ substExpr b x a = go
       substPred x a (Rel o p1 p2) = Rel o (substPred x a p1) (substPred x a p2)
       substPred x a (PEffect e)   = PEffect (substExpr b x a e)
 
-fvExpr :: (Avoid b, Annot a, Ord b) => EffExpr b a -> Set.Set b
+fvExpr :: (Avoid b, Annot a, ToTyVar b, Ord b) => EffExpr b a -> Set.Set b
 fvExpr (EVal (b,_,p) _) = fvPred p Set.\\ Set.singleton b
 fvExpr (EVar x _)      = Set.singleton x
 fvExpr (ECon x as _)   = Set.unions (fv <$> as)
@@ -334,10 +393,10 @@ fvExpr (SymSpawn e p _) = fv e `Set.union` fv p
 fvExpr (Self _)         = Set.empty
 fvExpr (EType t _)      = Set.empty
 
-fvAlts :: (Avoid b, Annot a, Ord b) => (b, [b], EffExpr b a) -> Set.Set b
+fvAlts :: (Avoid b, Annot a, ToTyVar b, Ord b) => (b, [b], EffExpr b a) -> Set.Set b
 fvAlts (_, xs, e) = fv e Set.\\ (Set.fromList xs)
 
-fvPred :: (Avoid b, Annot a, Ord b) => Pred b a -> Set.Set b
+fvPred :: (Avoid b, Annot a, ToTyVar b, Ord b) => Pred b a -> Set.Set b
 fvPred (PVal v ps)   = Set.unions (fvPred <$> ps) Set.\\ Set.singleton v
 fvPred (Rel _ p1 p2) = fvPred p1 `Set.union` fvPred p2
 fvPred (PEffect e)   = fv e

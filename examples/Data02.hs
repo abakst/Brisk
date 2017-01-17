@@ -18,6 +18,8 @@ instance Binary PingMessage
 pingProcess :: ProcessId -> Process ()         
 pingProcess whom = do me <- getSelfPid
                       send whom $ Ping me
+                      expect :: Process PingMessage
+                      return ()
 
 pongProcess :: Process ()
 pongProcess = do msg       <- expect

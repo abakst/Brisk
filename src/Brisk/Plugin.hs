@@ -7,6 +7,19 @@ import Brisk.Model.Extract
 import Brisk.Model.Spec
 import Control.Exception
 
+import ErrUtils
+import HscMain
+import HscTypes
+import IfaceEnv
+import Finder
+import OccName
+import TcEnv
+import TcRnMonad
+import TcRnDriver
+import DynamicLoading
+import Brisk.Pretty
+import Brisk.Model.GhcInterface
+
 plugin = briskPlugin       
 
 briskPlugin :: Plugin
@@ -26,9 +39,9 @@ briskPass bs guts
 
 runBrisk :: [String] -> ModGuts -> CoreProgram -> CoreM CoreProgram   
 runBrisk bs mg binds 
-  = do hsenv <- getHscEnv
-       liftIO $ withExceptions $ do
-         specs <- readSpecFiles
+  = do hsenv <- GhcPlugins.getHscEnv
+       liftIO . withExceptions $ do
+         specs <- readSpecFiles hsenv mg
          runMGen bs hsenv mg specs (deShadowBinds binds)
        return binds
          where
@@ -37,9 +50,10 @@ runBrisk bs mg binds
            handleUserError e@(ErrorCall _)
              = putStrLn (displayException e) 
 
-readSpecFiles :: IO [Spec]
-readSpecFiles = do specs <- getSpecFiles
-                   concat <$> mapM parseSpecFile specs
+readSpecFiles :: HscEnv -> ModGuts -> IO [Spec]
+readSpecFiles env mg
+  = do specs <- getSpecFiles
+       concat <$> mapM (parseSpecFile env mg) specs
        
 getSpecFiles :: IO [String]
 getSpecFiles = find always (extension ==? ".espec") =<< getDataDir
