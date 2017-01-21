@@ -7,7 +7,7 @@
 {-# Language GADTs #-}
 module Brisk.Model.Types where
 
-import GhcPlugins (showSDoc, unsafeGlobalDynFlags, ppr)
+import GhcPlugins (SrcSpan, showSDoc, unsafeGlobalDynFlags, ppr)
 import Brisk.Pretty
 import Brisk.UX
 import Brisk.Model.GhcInterface
@@ -157,6 +157,7 @@ simplify (ECon c xs l)   = ECon c (simplify <$> xs) l
 simplify (ELam b e l)    = ELam b (simplify e) l
 simplify (EReturn e l)   = EReturn (simplify e) l
 simplify (Send t p m l)  = Send t (simplify p) (simplify m) l
+simplify (Spawn p l)     = Spawn (simplify p) l
 simplify r@Recv{}        = r
 simplify t@EType{}       = t
 simplify x@EVar{}        = x
@@ -436,3 +437,11 @@ instance Avoid Id where
 
 instance Annot () where
   dummyAnnot = ()
+
+type TyAnnot  = (Maybe Tr.Type, SrcSpan)
+type AbsEff = EffExpr Id TyAnnot
+
+data SpecTable = SpecTable [SpecEntry]
+                 deriving Show
+data SpecEntry = Id :<=: AbsEff
+                 deriving Show

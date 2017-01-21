@@ -44,16 +44,15 @@ initialEState henv mg t
         , cnt      = 0
         , srcSpans = [noSrcSpan]
         }
-type TyAnnot  = (Maybe Ty.Type, SrcSpan)
-type AbsEff = EffExpr Id TyAnnot
+
 type EffMap = Env.Env Id AbsEff 
 
 instance Annot TyAnnot where
   dummyAnnot = (Nothing, noSrcSpan)
 
 instance HasType TyAnnot where
-  getType         = fromJust . fst
-  setType t (_,l) = (Just t,l)
+  getType         = fst
+  setType t (_,l) = (t,l)
 
 instance ToTyVar Id where
   toTyVar = mkTyVar
@@ -72,16 +71,19 @@ popSpan = do span:spans <- gets srcSpans
 noAnnot :: Functor f => f a -> f TyAnnot
 noAnnot = fmap (const dummyAnnot)
 
+specAnnot :: Maybe Type -> TyAnnot  
+specAnnot t = (t, noSrcSpan)
+
 annotType :: CoreExpr -> AbsEff -> AbsEff
 annotType e t = t { annot = a }
   where
     a | isTypeArg e = annot t
       | otherwise   = (Just (exprType e),  snd (annot t))
 
-runMGen :: [String] -> HscEnv -> ModGuts -> [Spec] -> CoreProgram -> IO ()
+runMGen :: [String] -> HscEnv -> ModGuts -> [Spec] -> CoreProgram -> IO SpecTable
 runMGen bs hsenv mg specs prog
   = do initBinds <- resolve hsenv (specTuple <$> specs)
-       let g0    = Env.addsEnv Env.empty [ (nameId x, noAnnot b) | (x,b) <- initBinds ]
+       let g0    = Env.addsEnv Env.empty [ (nameId x, specAnnot <$> b) | (x,b) <- initBinds ]
        procTy    <- ghcTyName hsenv "Control.Distributed.Process.Internal.Types" "Process"
        g         <- evalStateT (go g0 prog) (initialEState hsenv mg procTy)
        ns        <- forM bs findModuleNameId
@@ -96,6 +98,7 @@ runMGen bs hsenv mg specs prog
        --   putStrLn (show x ++ " :=\n" ++ runPromela e)
        forM_ binds $ 
          putStrLn . toBriskString . snd
+       return $ SpecTable [ x :<=: e | (x,e) <- binds ]
   where
     go :: EffMap -> CoreProgram -> MGen EffMap
     go                     = foldM mGenBind

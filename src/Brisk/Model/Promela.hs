@@ -122,8 +122,8 @@ promelaProc pid (IceT.Recv t x)
   where
     maybeVar = fromMaybe "_"
 
-promelaProc pid (IceT.Send _ p m)
-  = do ty  <- typeId (getType m)
+promelaProc pid (IceT.Send t p m)
+  = do ty  <- typeId t
        msg <- promelaExpr m
        to  <- promelaExpr p
        return $ send ty to msg
@@ -194,7 +194,7 @@ promelaExpr :: (Show a, HasType a)
 promelaExpr (EVar x _)
   = return x
 promelaExpr (ECon c args l)
-  = promelaConstr c args (getType l)
+  = promelaConstr c args (fromJust $ getType l)
 promelaExpr e
   = abort "promelaExpr" e
 
@@ -204,7 +204,7 @@ promelaPid (SymSet p _)
   = return p
 
 promelaConstr c args t
-  = do let aexps = filter ((/=t) . getType) args
+  = do let aexps = filter ((/=t) . fromJust . getType) args
        tid       <- typeId t
        argStrs   <- intercalate "," <$> mapM promelaExpr aexps
        return $ printf "__Mk_%s_%s__(%s)" tid c argStrs

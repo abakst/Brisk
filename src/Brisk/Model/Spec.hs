@@ -45,7 +45,7 @@ instance Pretty Spec where
     where
       mod = intercalate "." ms
 
-type BareExpr = EffExpr Id ()
+type BareExpr = EffExpr Id (Maybe Type)
 
 type EffParser a = ParsecT String (HscEnv, ModGuts) IO a
 
@@ -155,22 +155,22 @@ opExpr = PE.buildExpressionParser opTab effExpr'
               ]
             ]
 
-mkBind e1 e2 = EBind e1 e2 ()
+mkBind e1 e2 = EBind e1 e2 Nothing
 
 mkCons e1 e2 = ECon { conId   = "Cons"
                     , conArgs = [e1,e2]
-                    , annot   = ()
+                    , annot   = Nothing
                     }
 
 mkNil        = ECon { conId   = "Nil"
                     , conArgs = []
-                    , annot   = ()
+                    , annot   = Nothing
                     }
 
 effField :: EffParser BareExpr
 effField = do e <- effExpr''
               i <- read <$> brackets (many1 digit)
-              return (EField e i ())
+              return (EField e i Nothing)
 
 effRec :: EffParser BareExpr
 effRec = do reserved "let"
@@ -180,8 +180,7 @@ effRec = do reserved "let"
             e <- effExpr
             reserved "in"
             i' <- ident
-            let foo = (ERec i e ())
-            return foo
+            return $ ERec i e Nothing
 
 effType :: EffParser Type            
 effType =  try ghcPairType
@@ -219,7 +218,7 @@ effPrRec = do reserved "$R"
                 e0 <- effExpr
                 comma
                 xs <- effExpr
-                return (EPrRec i j f e0 xs ())
+                return (EPrRec i j f e0 xs Nothing)
 
 effProcess :: EffParser BareExpr      
 effProcess = try send
@@ -235,21 +234,21 @@ effProcess = try send
                 p <- effExpr
                 comma
                 m <- effExpr
-                return (Send (EType t ()) p m ())
+                return (Send (EType t Nothing) p m { annot = Just t } Nothing)
     recv = do reserved "$recv"
               ty <- parens effType
-              return (Recv (EType ty ()) ())
+              return (Recv (EType ty Nothing) Nothing)
     spawn = do reserved "$spawn"
                p <- parens effExpr
-               return (Spawn p ())
+               return (Spawn p Nothing)
     self = do reserved "$self"
-              return (Self ())
+              return (Self Nothing)
     symSpawn = do reserved "$symSpawn"
                   parens $ do
                     xs <- effExpr
                     comma
                     p  <- effExpr
-                    return (SymSpawn xs p ())
+                    return (SymSpawn xs p Nothing)
                   
 
 pair :: EffParser a -> EffParser (a,a)
@@ -274,10 +273,10 @@ qualIdent = sepBy1 ident (symbol ".")
 effReturn :: EffParser BareExpr
 effReturn = do reserved "return"
                e <- effExpr
-               return (EReturn e ())
+               return (EReturn e Nothing)
 
 effVar :: EffParser BareExpr
-effVar = flip EVar () . intercalate "." <$> qualIdent
+effVar = flip EVar Nothing . intercalate "." <$> qualIdent
 
 effLam :: EffParser BareExpr
 effLam = do symbol "\\"
@@ -286,19 +285,19 @@ effLam = do symbol "\\"
             e  <- effExpr
             return $ foldr go e xs
               where
-                go x e = ELam x e ()
+                go x e = ELam x e Nothing
 
 effBind :: EffParser BareExpr
 effBind = do e1 <- effExpr'
              symbol ">>="
              e2 <- effExpr
-             return (EBind e1 e2 ())--chainl1 effExpr (symbol ">>=" >> return go)
+             return (EBind e1 e2 Nothing)--chainl1 effExpr (symbol ">>=" >> return go)
 
 effApp :: EffParser BareExpr
 effApp = do e:es <- many1 effExpr''
             return $
               case e of
-                EVar c _ | isUpper (c !! 0) -> ECon c es ()
+                EVar c _ | isUpper (c !! 0) -> ECon c es Nothing
                 _                           -> foldl' go e es
                 where
-                  go e e' = EApp e e' ()
+                  go e e' = EApp e e' Nothing

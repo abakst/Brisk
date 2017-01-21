@@ -4,10 +4,6 @@ GHC.Base.$ <= {
   \a b x y -> (x y)
 }
 
-GHC.Prim.void# <= {
-  void
-}
-
 Control.Monad.forM <= {
   \t m a b xs f -> $R(a, x, f x >>= \y -> return (y : a), [], xs)
 }
@@ -28,7 +24,7 @@ Control.Distributed.Process.Internal.Primitives.getSelfPid <= {
   $self
 }
 
-Control.Distributed.Process.Internal.Primitives.spawnLocal <= {
+Control.Distributed.Process.spawnLocal <= {
   \p -> $spawn(p)
 }
 

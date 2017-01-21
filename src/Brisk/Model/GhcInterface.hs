@@ -84,6 +84,12 @@ ghcVar env mod var
        m  <- lookupMod env (mkModuleName mod) 
        initTcForLookup env (lookupOrig m occNm >>= lookupId)
 
+ghcDataCon :: HscEnv -> String -> String -> IO DataCon
+ghcDataCon env mod var
+  = do let occNm = mkOccName OccName.dataName var 
+       m  <- lookupMod env (mkModuleName mod) 
+       initTcForLookup env (lookupOrig m occNm >>= lookupDataCon)
+
 ghcTyName :: HscEnv -> String -> String -> IO Name
 ghcTyName env mod ty
   = do let occNm = mkOccName OccName.clsName ty

@@ -33,6 +33,7 @@ library
                    , Brisk.Model.Builtins
                    , Brisk.Model.Prolog
                    , Brisk.Model.Promela
+                   , Brisk.Model.EmbedCore
                    , Brisk.Model.IceT
                    , Brisk.Model.GhcInterface
                    , Control.Distributed.Process.SymmetricProcess
@@ -65,5 +66,5 @@ library
                      , parsec
                      , filemanip
                      , pretty-show
-  hs-source-dirs:      src
+  hs-source-dirs:      src, examples
   default-language:    Haskell2010

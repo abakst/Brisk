@@ -48,8 +48,8 @@ fromIceTStmt pid s@(Seq _)
   where
     (Seq ss) = flattenSeq s
 
-fromIceTStmt pid (Send _ p m)
-  = mkSend (prolog pid) [ prolog (getType m)
+fromIceTStmt pid (Send t p m)
+  = mkSend (prolog pid) [ prolog t
                         , fromIceTPid  p
                         , fromIceTExpr pid m
                         ]
@@ -62,7 +62,7 @@ fromIceTStmt pid (Recv ty my)
                         ]
   where
     y = case my of
-          Nothing -> prolog "nil"
+          Nothing -> prolog "_"
           Just y  -> prolog y
 
 fromIceTStmt pid (Assgn x _ e)
