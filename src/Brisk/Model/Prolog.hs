@@ -216,3 +216,14 @@ instance Prolog Int where
 instance Prolog GT.Type where
   prolog t = text $ GT.showSDoc GT.unsafeGlobalDynFlags (GT.ppr t)
   prologPid = error "prologPid of Type"
+
+instance Prolog b => Prolog (T.Type b) where
+  prologPid = abort "prologPid" "prologPid of Type"
+  prolog (T.TyVar v)
+    = compoundTerm "tyVar" [prolog v]
+  prolog (T.TyApp t1 t2)
+    = compoundTerm "tyApp" [prolog t1, prolog t2]
+  prolog (T.TyFun t1 t2)
+    = compoundTerm "tyFun" [prolog t1, prolog t2]
+  prolog (T.TyConApp t ts)
+    = compoundTerm "tyCon" (prolog t : fmap prolog ts)

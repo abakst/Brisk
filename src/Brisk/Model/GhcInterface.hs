@@ -1,6 +1,7 @@
 module Brisk.Model.GhcInterface where
 
 import GhcPlugins
+import Avail
 import Var
 import Id  
 import Unique
@@ -17,7 +18,10 @@ import HscMain
 import TcRnDriver
 import ConLike
 import TcEnv
+
 import Data.Char
+import Data.Maybe
+import Data.List
 
 import Brisk.UX
 import Brisk.Pretty
@@ -41,15 +45,19 @@ ghcVarName env mod var
 
 ghcRawVarName :: HscEnv -> String -> IO Name
 ghcRawVarName env nm
+  = fromJust <$> ghcRawVarName_maybe env nm
+
+ghcRawVarName_maybe :: HscEnv -> String -> IO (Maybe Name)
+ghcRawVarName_maybe env nm
   = do rdrNm    <- hscParseIdentifier env nm
        (_, nms) <- tcRnLookupRdrName env rdrNm
        case nms of
          Just [name] -> do
            res <- initTcForLookup env (tcLookupGlobal name)
            case res of
-             AConLike (RealDataCon dc) -> return $ getName dc
-             _                         -> return name
-         _           -> error ("Unable to resolve: " ++ nm)
+             AConLike (RealDataCon dc) -> return $ Just (getName dc)
+             _                         -> return $ Just name
+         _           -> return Nothing
 
 ghcFindName :: HscEnv -> ModGuts -> String -> IO (Maybe Name)
 ghcFindName env mg str = do
@@ -146,3 +154,31 @@ instance Pretty Type where
 
 briskShowPpr :: Outputable a => a -> String
 briskShowPpr = showSDoc unsafeGlobalDynFlags . ppr
+
+getImportedNames :: HscEnv -> ModGuts -> Module -> IO [Name]
+getImportedNames env mg mod
+  = do epsPIT <- liftIO $ eps_PIT <$> hscEPS env
+       let enames = [ n | Avail n <- concat (mi_exports <$> lookupModuleEnv epsPIT mod)    ]
+           inames = [ n | Avail n <- concat (mi_exports . hm_iface <$> lookupUFM hpt muniq) ]
+           muniq  = modUnique mod
+           hpt    = hsc_HPT env
+       return (enames ++ inames)
+
+exportedNames :: ModGuts -> [Name]        
+exportedNames mg
+  = [ n | Avail n <- mg_exports mg ]
+
+whenExports :: MonadIO m => HscEnv -> ModGuts -> Module -> OccName -> m a -> m (Maybe a)       
+whenExports env mg mod nm act
+  = do nms <- (getOccName <$>) <$> liftIO (getImportedNames env mg mod)
+       if nm `elem` nms then
+         Just <$> act
+       else
+         return Nothing
+
+usedModules :: ModGuts -> [Module]
+usedModules = nub . mapMaybe nameModule_maybe . uniqSetToList . mg_used_names
+
+modUnique :: Module -> Unique
+modUnique = getUnique . moduleName 
+

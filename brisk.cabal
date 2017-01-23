@@ -22,6 +22,7 @@ library
   -- build-tools:       alex, happy
   exposed-modules:   Brisk.Plugin
                    , Brisk.UX
+                   , Brisk.Annotations
                    , Brisk.Transform.SpanStack
                    , Brisk.Transform.Misc
                    , Brisk.Transform.ANF
@@ -32,13 +33,18 @@ library
                    , Brisk.Model.Extract
                    , Brisk.Model.Builtins
                    , Brisk.Model.Prolog
-                   , Brisk.Model.Promela
+                   -- , Brisk.Model.Promela
                    , Brisk.Model.EmbedCore
                    , Brisk.Model.IceT
                    , Brisk.Model.GhcInterface
+
                    , Control.Distributed.Process.SymmetricProcess
+                   , Control.Distributed.Process.Internal.Primitives.Brisk
                    , Control.Distributed.BriskStatic
                    , Control.Distributed.BriskStatic.Internal
+
+                   , GHC.Base.Brisk
+
   other-modules:   Paths_brisk
 
   -- other-modules:     Brisk.UX.SpecLex
@@ -48,8 +54,11 @@ library
   build-depends:       base >=4 && < 5
                      , syb
                      , binary
+                     , bytestring
                      , ghc
                      , containers
+                     , cereal
+                     , generic-deriving
                      , distributed-process
                      , distributed-static
                      , distributed-process-client-server

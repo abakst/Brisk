@@ -17,7 +17,7 @@ import           Brisk.UX
 type ProcessId = String
 
 type IceTExpr a = E.EffExpr E.Id a
-type IceTType   = Type
+type IceTType   = E.Type E.Id
 
 data IceTStmt a = Send IceTType (IceTExpr a) (IceTExpr a)
                 | Recv IceTType (Maybe E.Id)
@@ -42,8 +42,8 @@ data IceTState a = IS { current   :: Char
                       }
 
 class HasType a where
-  getType :: a -> Maybe Type
-  setType :: Maybe Type -> a -> a
+  getType :: a -> Maybe IceTType
+  setType :: Maybe IceTType -> a -> a
 
 instance HasType a => HasType (IceTExpr a) where
   getType     = getType . E.annot
@@ -163,7 +163,7 @@ fromEffExp s (E.Self l) _
        return (Skip, Just (E.EVar [me] (setType t' l)))
          where
            t' = go <$> getType l
-           go = head . snd . splitAppTys
+           go = head . snd . E.splitAppTys
 
 fromEffExp s app@(E.EApp _ _ l) _
   = fromApp l s f as
@@ -198,6 +198,9 @@ fromEffExp s (E.EVar x l) _
     go (Just []) = return (Continue, Nothing)
     go _         = error ("fromEffExpr: bare var (" ++ x ++ ")")
 
+fromEffExp s e@(E.EVal x _) _    
+  = return (Skip, Just e)
+
 fromEffExp s e _
   = error ("fromEffExpr:\n" ++ E.exprString e)
 
@@ -217,10 +220,13 @@ fromPure s (E.EField e i l)
 fromPure s e@(E.ECon c as l)
   = do as' <- mapM (fromPure s) as
        return (E.ECon c as' l)
-fromPure s e@(E.EVal (vv,t,p) l)
+fromPure s e@(E.EVal _ l)
   = return e
-fromPure s (E.EVar b l)
-  = return (lookupStore s b)
+fromPure s v@(E.EVar b l)
+  = do ps <- gets params
+       return $ if b `elem` ps
+                  then v
+                  else lookupStore s b
 
 ---------------------------------------------------
 fromApp :: (Show a, HasType a)
@@ -244,13 +250,17 @@ fromApp l s (E.ERec f e l') as
   where
     (xs,body) = E.collectArgs e -- e should be a function in general
     s'        = addsStore l s xs
-fromApp l s (E.EVar f _) as
-  = recCall f >>= go
+fromApp l s exp@(E.EVar f _) as
+  = do ps <- gets params
+       recCall f >>= go ps
   where
-    go (Just xs)
+    go _ (Just xs)
       = return (flattenSeq $ Seq [mkAssigns (zip xs as), Continue], Nothing)
-    go _
+    go ps _
+      | f `notElem` ps
       = abort "fromApp" ("Unknown Function: " ++ render (pp f))
+      | otherwise
+      = return (Skip, Just exp)
 fromApp l s e as
   = abort "fromApp" e
 

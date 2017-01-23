@@ -1,4 +1,4 @@
-module Brisk.Model.Env (empty, lookup, insert, addsEnv, toList, Env(..)) where
+module Brisk.Model.Env (empty, lookup, insert, addsEnv, unionEnvs, toList, Env(..)) where
 
 import Prelude hiding (lookup, insert)
 import qualified Data.Map.Strict as M
@@ -21,3 +21,6 @@ addsEnv :: Ord k => Env k v -> [(k,v)] -> Env k v
 addsEnv = foldl go 
   where
     go e (k,v) = insert e k v
+
+unionEnvs :: Ord k => Env k v -> Env k v -> Env k v
+unionEnvs = M.union

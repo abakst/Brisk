@@ -1,4 +1,14 @@
 *.*~
 *.o~
+*.o
+*.dyn_o
+*.dyn_hi
 *.hi
 *.ho
+.git_ignore
+.stack-work
+.hpc
+.dir-locals.el
+*.#*
+*.*#
+#*.hs

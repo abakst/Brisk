@@ -1,63 +1,63 @@
 module spec Prelude where
 
-GHC.Base.$ <= {
-  \a b x y -> (x y)
-}
+-- GHC.Base.$ <= {
+--   \a b x y -> (x y)
+-- }
 
-Control.Monad.forM <= {
-  \t m a b xs f -> $R(a, x, f x >>= \y -> return (y : a), [], xs)
-}
+-- Control.Monad.forM <= {
+--   \t m a b xs f -> $R(a, x, f x >>= \y -> return (y : a), [], xs)
+-- }
 
-Control.Monad.mapM <= {
-  \t m a b f xs -> $R(a, x, f x >>= \y -> return (y : a), [], xs)
-}
+-- Control.Monad.mapM <= {
+--   \t m a b f xs -> $R(a, x, f x >>= \y -> return (y : a), [], xs)
+-- }
 
-Control.Distributed.BriskStatic.Internal.castEffect <= {
-  \a b x y -> y
-}
+-- Control.Distributed.BriskStatic.Internal.castEffect <= {
+--   \a b x y -> y
+-- }
 
-Control.Distributed.Process.Internal.Primitives.send <= {
-  \t x y -> $send(t,x,y)
-}
+-- Control.Distributed.Process.Internal.Primitives.send <= {
+--   \t x y -> $send(t,x,y)
+-- }
 
-Control.Distributed.Process.Internal.Primitives.getSelfPid <= {
-  $self
-}
+-- Control.Distributed.Process.Internal.Primitives.getSelfPid <= {
+--   $self
+-- }
 
-Control.Distributed.Process.spawnLocal <= {
-  \p -> $spawn(p)
-}
+-- Control.Distributed.Process.spawnLocal <= {
+--   \p -> $spawn(p)
+-- }
 
-Control.Distributed.Process.Internal.Primitives.expect <= {
-  \t -> $recv(t)
-}
+-- Control.Distributed.Process.Internal.Primitives.expect <= {
+--   \t -> $recv(t)
+-- }
 
-Control.Distributed.Process.SymmetricProcess.spawnSymmetric <= {
-  \nodes p -> $symSpawn(nodes, p)
-}
+-- Control.Distributed.Process.SymmetricProcess.spawnSymmetric <= {
+--   \nodes p -> $symSpawn(nodes, p)
+-- }
 
-Control.Distributed.Process.ManagedProcess.serve <= {
-  \t0 t1 s0 initFn p ->
-    let rec loop = \st -> (((p[0])[0]) st >>= (\st' -> loop st'))
-    in loop s0
-}
+-- Control.Distributed.Process.ManagedProcess.serve <= {
+--   \t0 t1 s0 initFn p ->
+--     let rec loop = \st -> (((p[0])[0]) st >>= (\st' -> loop st'))
+--     in loop s0
+-- }
 
 
-Control.Distributed.Process.ManagedProcess.defaultProcess <= {
-  \t0 ->
-     Control.Distributed.Process.ManagedProcess.Internal.Types.ProcessDefinition
-       [] [] [] (\s -> s) (\s t -> s) Terminate
-}
+-- Control.Distributed.Process.ManagedProcess.defaultProcess <= {
+--   \t0 ->
+--      Control.Distributed.Process.ManagedProcess.Internal.Types.ProcessDefinition
+--        [] [] [] (\s -> s) (\s t -> s) Terminate
+-- }
 
-Control.Distributed.Process.ManagedProcess.Server.handleCall <= {
-  \ts tmsg tresp fn st -> $recv((Control.Distributed.Process.Internal.Types.ProcessId, tmsg))
-                      >>= (\msg -> (fn st (msg[1]) (msg[0])))
-}
+-- Control.Distributed.Process.ManagedProcess.Server.handleCall <= {
+--   \ts tmsg tresp fn st -> $recv((Control.Distributed.Process.Internal.Types.ProcessId, tmsg))
+--                       >>= (\msg -> (fn st (msg[1]) (msg[0])))
+-- }
 
-Control.Distributed.Process.ManagedProcess.Server.reply <= {
-  \r s -> \msg st p -> $send(r, p, msg) >>= (\x -> return st)
-}
+-- Control.Distributed.Process.ManagedProcess.Server.reply <= {
+--   \r s -> \msg st p -> $send(r, p, msg) >>= (\x -> return st)
+-- }
 
-Control.Distributed.Process.ManagedProcess.Client.call <= {
-  \ts ta tb p msg -> ($self >>= \me -> $send((Control.Distributed.Process.Internal.Types.ProcessId, ta), p, (Pair me msg)) >>= \r0 -> $recv(tb))
-}
+-- Control.Distributed.Process.ManagedProcess.Client.call <= {
+--   \ts ta tb p msg -> ($self >>= \me -> $send((Control.Distributed.Process.Internal.Types.ProcessId, ta), p, (Pair me msg)) >>= \r0 -> $recv(tb))
+-- }

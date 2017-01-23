@@ -23,7 +23,7 @@ import           Brisk.Model.Types
 import           Brisk.Model.Spec
 import           Brisk.Model.Builtins
 import           Brisk.Model.Prolog
-import           Brisk.Model.Promela
+-- import           Brisk.Model.Promela
 import           Brisk.Model.IceT (runIceT, HasType(..))
 import           Brisk.Pretty
 import           Text.PrettyPrint.HughesPJ as PP
@@ -71,19 +71,28 @@ popSpan = do span:spans <- gets srcSpans
 noAnnot :: Functor f => f a -> f TyAnnot
 noAnnot = fmap (const dummyAnnot)
 
-specAnnot :: Maybe Type -> TyAnnot  
-specAnnot t = (t, noSrcSpan)
+specAnnot :: Maybe Ty.Type -> TyAnnot  
+specAnnot t = (ofType nameId <$> t, noSrcSpan)
 
 annotType :: CoreExpr -> AbsEff -> AbsEff
 annotType e t = t { annot = a }
   where
     a | isTypeArg e = annot t
-      | otherwise   = (Just (exprType e),  snd (annot t))
+      | otherwise   = (Just (exprEType e),  snd (annot t))
 
-runMGen :: [String] -> HscEnv -> ModGuts -> [Spec] -> CoreProgram -> IO SpecTable
+exprEType = ofType nameId . exprType    
+
+liftAnnot t = (t, noSrcSpan)  
+
+specTableEnv :: SpecTableIn -> EffMap
+specTableEnv (SpecTable tab)
+  = Env.addsEnv Env.empty [ (x, liftAnnot <$> t) | x :<=: t <- tab ]
+
+runMGen :: [String] -> HscEnv -> ModGuts -> SpecTableIn -> CoreProgram -> IO SpecTableOut
 runMGen bs hsenv mg specs prog
-  = do initBinds <- resolve hsenv (specTuple <$> specs)
-       let g0    = Env.addsEnv Env.empty [ (nameId x, specAnnot <$> b) | (x,b) <- initBinds ]
+  = do -- initBinds <- resolve hsenv (specTuple <$> specs)
+       -- let g0    = Env.addsEnv Env.empty [ (nameId x, specAnnot <$> b) | (x,b) <- initBinds ]
+       let g0    = Env.unionEnvs (specTableEnv builtin) (specTableEnv specs)
        procTy    <- ghcTyName hsenv "Control.Distributed.Process.Internal.Types" "Process"
        g         <- evalStateT (go g0 prog) (initialEState hsenv mg procTy)
        ns        <- forM bs findModuleNameId
@@ -116,9 +125,7 @@ bindId :: NamedThing a => a -> Id
 bindId = nameId . getName
 
 annotOfBind x
-  = (Just $ idType x, getSrcSpan x)
-
-  
+  = (Just . ofType nameId $ idType x, getSrcSpan x)
 
 mGenBind :: EffMap -> CoreBind -> MGen EffMap 
 mGenBind g (NonRec x b)
@@ -154,7 +161,7 @@ mGenExpr' g (Tick _ e)
   = mGenExpr g e
 mGenExpr' g (Type t)
   = do s <- currentSpan
-       return (EType t (Nothing, s))
+       return (EType (ofType nameId t) (Nothing, s))
 mGenExpr' g exp@(Cast e _)
   = mGenExpr g e
 
@@ -182,13 +189,17 @@ mGenExpr' g abs@(Lam b e)
        if isDictId b then
          return a
        else
-         return (lam n a (Just (exprType abs), s))
+         return (lam n a (Just (exprEType abs), s))
          where
            n = bindId b
 
 mGenExpr' g (App e e')
   | not (isTypeArg e') && isDictTy (exprType e')
   = mGenExpr g e
+mGenExpr' g e@(App (Var i) l)
+  | Just dc <- isDataConWorkId_maybe i,
+    dc == intDataCon
+  = mGenExpr' g l
 mGenExpr' g e@(App e1@(Var f) e2@(Type t))
   | isMonadOp f, Just tc <- tyConAppTyCon_maybe t
   = do a <- mGenMonadOp f tc
@@ -207,8 +218,8 @@ mGenExpr' g e@(Case e' _ t alts)
        defA  <- mapM (mGenExpr g) def
        as    <- mGenCaseAlts g alts'
        s     <- currentSpan
-       let tCase = exprType e'
-           tExp  = exprType e
+       let tCase = exprEType e'
+           tExp  = exprEType e
        return $ ECase tCase a as defA (Just tExp, s)
          where
            (alts', def) = findDefault alts
@@ -310,10 +321,10 @@ mGenCaseAlts g = mapM go
       = error "unhandled DEFAULT case"
 
 litEffect :: SrcSpan -> Literal -> AbsEff
-litEffect l (LitInteger i _) = EVal (pInt vv (fromInteger i) (Nothing, l)) (Nothing, l)
-litEffect l (MachInt i)      = EVal (pInt vv (fromInteger i) (Nothing, l)) (Nothing, l)
-litEffect l (MachInt64 i)    = EVal (pInt vv (fromInteger i) (Nothing, l)) (Nothing, l)
-litEffect l _                = EVal (pInt vv 0 (Nothing, l)) (Nothing, l)
+litEffect l (LitInteger i _) = litInt i (Nothing, l)
+litEffect l (MachInt i)      = litInt i (Nothing, l)
+litEffect l (MachInt64 i)    = litInt i (Nothing, l)
+litEffect l _                = litInt 0 (Nothing, l)
 
 instance Pretty Name where
   ppPrec _ i = text $ showSDoc unsafeGlobalDynFlags (ppr i)

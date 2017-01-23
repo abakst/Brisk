@@ -34,6 +34,39 @@ monadBuiltin =  [ (bindMName, bindWiredIn)
                 , (thenMName, thenWiredIn)
                 , (returnMName, returnWiredIn)
                 ]   
+pidType :: Type Id
+pidType = TyConApp "Control.Distributed.Process.Internal.Types.ProcessId" []
+
+procType :: Type Id -> Type Id
+procType t = TyConApp "Control.Distribted.Process.Internal.Types.Process" [t]
+
+unitType = TyConApp "GHC.Base.()" []  
+
+builtin :: SpecTableIn
+builtin = SpecTable [
+    "Control.Distributed.Process.Internal.Primitives.send"
+    :<=:
+    ELam "t" (
+        ELam "p" (
+            ELam "m" (
+                Send (EType (TyVar "t") Nothing)
+                (EVar "p" (Just pidType))
+                (EVar "m" (Just (TyVar "t")))
+                (Just (procType unitType))
+                ) (Just $ TyFun (TyVar "t") (procType unitType))
+            ) (Just $ TyFun pidType (TyFun (TyVar "t") (procType unitType)))
+        ) Nothing
+
+  , "Control.Distributed.Process.Internal.Primitives.getSelfPid"
+    :<=:
+    Self (Just (procType pidType))
+    
+  , "Control.Distributed.Process.Internal.Primitives.expect"
+    :<=:
+    ELam "t" (Recv (EType (procType (TyVar "t")) Nothing)
+                   (Just  (procType (TyVar "t"))))
+             Nothing
+  ]
 {-
 builtin :: [(String, String, EffExpr Id ())]
 builtin = [ ("GHC.Num", "-", t $->$ x $->$ y $->$ EVal (pExpr v Eq (eMinus (pVar x ()) (pVar y ())) ()) ())

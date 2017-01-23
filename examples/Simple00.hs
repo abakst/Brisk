@@ -2,12 +2,9 @@
 {-# OPTIONS_GHC -fplugin-opt Brisk.Plugin:main #-}
 module Simple00 where
 import Control.Distributed.Process
-import Brisk.Model.Types hiding (Process)
-import ImportMe
+import GHC.Base.Brisk
 
 main :: Process () 
-main = do me <- getSelfPid
-          send me me
-
-z = EVar "e" ()
-foo = x
+main = do p <- getSelfPid
+          m <- expect
+          flip send p $ m

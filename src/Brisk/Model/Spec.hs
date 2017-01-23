@@ -10,7 +10,7 @@ import Control.Monad.Trans
 import Control.Exception (throw)
 import Text.PrettyPrint.HughesPJ ((<+>), ($$), text, nest, (<>))
 import Data.List
-import Brisk.Model.Types (EffExpr(..), Id, Pred(..))
+import Brisk.Model.Types (ofType, EffExpr(..), Id, Pred(..))
 import Brisk.Pretty
 import Text.ParserCombinators.Parsec hiding (try)
 import Text.Parsec (Stream, ParsecT(..), runParserT)
@@ -234,10 +234,10 @@ effProcess = try send
                 p <- effExpr
                 comma
                 m <- effExpr
-                return (Send (EType t Nothing) p m { annot = Just t } Nothing)
+                return (Send (EType (ofType nameId t) Nothing) p m { annot = Just t } Nothing)
     recv = do reserved "$recv"
-              ty <- parens effType
-              return (Recv (EType ty Nothing) Nothing)
+              t <- parens effType
+              return (Recv (EType (ofType nameId t) Nothing) Nothing)
     spawn = do reserved "$spawn"
                p <- parens effExpr
                return (Spawn p Nothing)

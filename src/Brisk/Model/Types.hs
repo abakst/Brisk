@@ -1,3 +1,6 @@
+{-# LANGUAGE MagicHash #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE DeriveFunctor #-}
 {-# Language MultiParamTypeClasses #-}
 {-# Language UndecidableInstances #-}
@@ -9,6 +12,7 @@ module Brisk.Model.Types where
 
 import GhcPlugins (SrcSpan, showSDoc, unsafeGlobalDynFlags, ppr)
 import Brisk.Pretty
+import GHC.Generics
 import Brisk.UX
 import Brisk.Model.GhcInterface
 import Text.PrettyPrint.HughesPJ
@@ -21,11 +25,15 @@ import Name
 import BasicTypes (Arity)
 import TyCon
 import DataCon
+import Data.Data
+import Data.Serialize
+import qualified Data.ByteString as B
 import qualified Type as T
 import qualified TypeRep as Tr
+import Data.Word
+import GHC.Word
 
 type Id = String                 
-
 
 -----------------------------------------------  
 --  Specification Language (Preds, Exprs, Types)
@@ -45,11 +53,13 @@ instance Functor (Pred b)  where
   fmap _ PTrue         = PTrue
 
 data Const = CInt Int          
-           deriving (Eq, Show)
-              
+           deriving (Eq, Show, Generic)
+instance Serialize Const 
+
 data Op = Eq | Le | NEq | Plus | Minus
         deriving (Eq, Show)
 
+litInt i a = EVal (Just (CInt (fromInteger i))) a
 pVar v a      = PEffect (var v a)
 pInt v i a    = (v, intTy, Rel Eq (pVar v a) (PConst (CInt i)))
 pSingle v x a = pVar v `eSingle` pVar x a
@@ -58,12 +68,22 @@ pExpr v o e a = (v, Rel o (pVar v a) e)
 ePlus  = Rel Plus
 eMinus = Rel Minus
 
+data Type b = -- ^ Essentially a mirror of GHC's Type  
+    TyVar b
+  | TyApp (Type b) (Type b)
+  | TyConApp b [Type b]
+  | TyFun (Type b) (Type b)
+  | TyForAll b (Type b)
+    deriving (Eq, Show, Generic)
+instance Serialize b => Serialize (Type b)
+
 type Subset b a = (b, T.Type, Pred b a)
 data EffExpr b a =
-   EVal    { valPred :: Subset b a, annot :: a }                -- ^ {v | p}
+   -- EVal    { valPred :: Subset b a, annot :: a }                -- ^ {v | p}
+   EVal    { valVal :: Maybe Const, annot :: a }
+ | EVar    { varId :: b, annot :: a }                          -- ^ x
  | ECon    { conId :: b, conArgs :: [EffExpr b a], annot :: a }
  | EField  { fieldExp :: EffExpr b a, fieldNo :: Int, annot :: a }
- | EVar    { varId :: b, annot :: a }                          -- ^ x
  | ELam    { lamId :: b, lamBody :: EffExpr b a, annot :: a }            -- ^ \x -> e
  | EApp    { appFun :: EffExpr b a, appArg :: EffExpr b a, annot :: a }
  | EPrRec  { precAcc  :: b
@@ -74,13 +94,13 @@ data EffExpr b a =
            , annot :: a
            }-- ^ R (\X x -> e, E, X0)
  | ERec    { recId :: b, recBody :: EffExpr b a, annot :: a }
- | ECase   { caseTy :: T.Type
+ | ECase   { caseTy :: Type b
            , caseArg :: EffExpr b a
            , caseAlts :: [(b, [b], EffExpr b a)]
            , caseDft :: (Maybe (EffExpr b a))
            , annot :: a
            }
- | EType   { typeTy :: T.Type, annot :: a }
+ | EType   { typeTy :: Type b, annot :: a }
  -- Processes
  | EProcess { procProc :: Process b a, procRet :: EffExpr b a, annot :: a }
  | EBind    { bindFst :: EffExpr b a, bindSnd :: EffExpr b a, annot :: a }
@@ -90,7 +110,8 @@ data EffExpr b a =
  | Spawn    { spawnProc :: Process b a, annot :: a }
  | SymSpawn { symSpawnSet :: EffExpr b a, symSpawnProc :: Process b a, annot ::  a } -- ^ symspawn(xs, p)
  | Self     { annot :: a }
-   deriving (Eq, Show, Functor)
+   deriving (Eq, Show, Generic, Functor)
+instance (Serialize b, Serialize a) => Serialize (EffExpr b a)
 
 type Process b a  = EffExpr b a
 type EffType b a  = EffExpr b a
@@ -109,6 +130,30 @@ x $@$ y     = app x y ()
 infixr $->$
 infixl $@$
 
+----------------------------------------------- 
+-- | Type Conversion 
+----------------------------------------------- 
+ofType :: (Name -> b) -> T.Type -> Type b
+ofType f = go 
+  where
+    go (Tr.TyVarTy v)
+      = TyVar . f $ getName v
+    go (Tr.AppTy t1 t2)
+      = TyApp (go t1) (go t2)
+    go (Tr.TyConApp tc ts)
+      = TyConApp (f . getName $ tc) (go <$> ts)
+    go (Tr.FunTy t1 t2)
+      = TyFun (go t1) (go t2)
+    go (Tr.ForAllTy v t)
+      = TyForAll (f . getName $ v) (go t)
+
+-- (t1 (t2 (t3 t4)))
+splitAppTys (TyApp t1 t2) = (t1, reverse (go [] t2))
+  where
+    go ts (TyApp t1 t2)
+      = go (t1:ts) t2
+    go ts t
+      = t:ts
 ----------------------------------------------- 
 -- | Operations on Expressions  
 ----------------------------------------------- 
@@ -165,7 +210,7 @@ simplify s@Self{}        = s
 simplify e = abort "simplify" e
 
 simplifyCaseApp :: forall a b. (Show a, Show b, Subst b (EffExpr b a))
-                => Tr.Type
+                => Type b
                 -> EffExpr b a
                 -> [(b, [b], EffExpr b a)]
                 -> Maybe (EffExpr b a)
@@ -212,11 +257,18 @@ class Ord b => Subst b a where
 class ToTyVar b where
   toTyVar :: b -> T.TyVar
 
+instance Pretty b => Pretty (Type b) where
+  ppPrec _ (TyVar b) = pp b
+  ppPrec _ (TyConApp b ts) = pp b <> brackets (spaces ts)
+  ppPrec _ (TyApp t1 t2) = pp t1 <+> pp t2
+  ppPrec _ (TyFun t1 t2) = pp t1 <+> text "->" <+> pp t2
+
 instance (Pretty b, Eq b) => Pretty (EffExpr b a) where
-  ppPrec _ (EVal (v,t,Rel Eq (PEffect (EVar v' _)) e) _)
-    | v == v' = pp e
-  ppPrec _ (EVal (v,t,p) _)
-    = braces (pp p)
+  -- ppPrec _ (EVal (v,t,Rel Eq (PEffect (EVar v' _)) e) _)
+  --   | v == v' = pp e
+  ppPrec _ (EVal mv _) = maybe (text "⊥") pp mv
+  -- ppPrec _ (EVal (v,t,p) _)
+  --   = braces (pp p)
   ppPrec _ (EField e i _)
     = pp e <> brackets (int i)
   ppPrec _ (ECon c [] _)
@@ -312,12 +364,23 @@ instance (Avoid b, Annot a, ToTyVar b, Ord b) => Subst b (EffExpr b a) where
   fv    = fvExpr
   subst = substExpr False
 
+instance Ord b => Subst b (Type b) where
+  fv _  = Set.empty
+  subst x t = go
+    where
+      go v@(TyVar x') | x == x'   = t
+                      | otherwise = v
+      go (TyApp t1 t2) = TyApp (go t1) (go t2)
+      go (TyConApp b ts) = TyConApp b (go <$> ts)
+      go (TyFun t1 t2) = TyFun (go t1) (go t2)
+
 -- A dirty hack, but maybe not so dirty
 substExpr :: (Avoid b, Annot a, ToTyVar b,  Ord b)
           => Bool -> b -> EffExpr b a -> EffExpr b a -> EffExpr b a
 substExpr b x a = go
     where
-      go v@(EVal (b,t,p) l) = (EVal (b, t, (substPred x a p)) l)
+      go v@(EVal{}) = v
+      -- go v@(EVal (b,t,p) l) = (EVal (b, t, (substPred x a p)) l)
       go v@(EVar x' _)
         = case a of
             EVar y' l | x == x' && b -> EVar y' l
@@ -360,19 +423,18 @@ substExpr b x a = go
       go (SymSpawn e p l) = SymSpawn (go e) (go p) l
       go ty@(EType t l)
         = case a of
-            EType t' l' -> EType (T.substTy tysubst t) l
-              where
-                tysubst = T.zipOpenTvSubst [toTyVar x] [t']
+            EType t' l' -> EType (subst x t' t)  l
             _           -> ty
 
-      substPred _ _ PTrue        = PTrue
-      substPred x a (PVal n ps)  = PVal n (substPred x a <$> ps)
-      substPred _ _ p@(PConst _) = p
-      substPred x a (Rel o p1 p2) = Rel o (substPred x a p1) (substPred x a p2)
-      substPred x a (PEffect e)   = PEffect (substExpr b x a e)
+      -- substPred _ _ PTrue        = PTrue
+      -- substPred x a (PVal n ps)  = PVal n (substPred x a <$> ps)
+      -- substPred _ _ p@(PConst _) = p
+      -- substPred x a (Rel o p1 p2) = Rel o (substPred x a p1) (substPred x a p2)
+      -- substPred x a (PEffect e)   = PEffect (substExpr b x a e)
 
 fvExpr :: (Avoid b, Annot a, ToTyVar b, Ord b) => EffExpr b a -> Set.Set b
-fvExpr (EVal (b,_,p) _) = fvPred p Set.\\ Set.singleton b
+-- fvExpr (EVal (b,_,p) _) = fvPred p Set.\\ Set.singleton b
+fvExpr (EVal _ _)      = Set.empty
 fvExpr (EVar x _)      = Set.singleton x
 fvExpr (ECon x as _)   = Set.unions (fv <$> as)
 fvExpr (EField e i _)  = fvExpr e
@@ -438,10 +500,35 @@ instance Avoid Id where
 instance Annot () where
   dummyAnnot = ()
 
-type TyAnnot  = (Maybe Tr.Type, SrcSpan)
+type TyAnnot  = (Maybe (Type Id), SrcSpan)
 type AbsEff = EffExpr Id TyAnnot
 
-data SpecTable = SpecTable [SpecEntry]
-                 deriving Show
-data SpecEntry = Id :<=: AbsEff
-                 deriving Show
+data SpecTable a = SpecTable [SpecEntry a]
+                 deriving (Show, Generic)
+data SpecEntry a = Id :<=: EffExpr Id a
+                   deriving (Show, Generic)
+
+type AnnOut       = TyAnnot
+type AnnIn        = Maybe (Type Id)
+type SpecEntryOut = SpecEntry AnnOut
+type SpecEntryIn  = SpecEntry AnnIn
+type SpecTableOut = SpecTable AnnOut
+type SpecTableIn  = SpecTable AnnIn
+
+instance Serialize a => Serialize (SpecEntry a)
+instance Serialize a => Serialize (SpecTable a)
+
+specTableToWords :: SpecTableIn -> [Word]
+specTableToWords = fmap conv . B.unpack . encode
+  where
+    conv (W8# w#) = W# w#
+
+wordsToSpecTable :: [Word] -> SpecTableIn    
+wordsToSpecTable wds
+  = case decode . B.pack . fmap conv $ wds of 
+      Left str -> abort "wordsToSpecTable" str
+      Right t  -> t
+  where
+    conv (W# w#) = W8# w#
+
+data BriskAnnot = AnnotModule

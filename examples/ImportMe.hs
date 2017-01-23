@@ -1,11 +1,14 @@
+{-# LANGUAGE TemplateHaskell #-}
 {-# OPTIONS_GHC -fplugin Brisk.Plugin #-}
-{-# OPTIONS_GHC -fplugin-opt Brisk.Plugin:x #-}
 module ImportMe where
-import Control.Distributed.Process
+import Brisk.Annotations
 import Brisk.Model.Types hiding (Process)
+{-# ANN module SpecModule #-}
 
-x :: Process ()
-x = getSelfPid >> return ()
+{-# ANN ap_spec (Assume '($)) #-}
+ap_spec :: (a -> b) -> a -> b
+ap_spec f x = f x
 
-z :: Int
-z = 3
+{-# ANN flip_spec (Assume 'flip) #-}
+flip_spec :: (a -> b -> c) -> b -> a -> c
+flip_spec f x y = f y x
