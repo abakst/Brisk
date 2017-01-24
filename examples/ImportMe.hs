@@ -2,7 +2,6 @@
 {-# OPTIONS_GHC -fplugin Brisk.Plugin #-}
 module ImportMe where
 import Brisk.Annotations
-import Brisk.Model.Types hiding (Process)
 {-# ANN module SpecModule #-}
 
 {-# ANN ap_spec (Assume '($)) #-}

@@ -27,6 +27,7 @@ import TcRnDriver
 import DynamicLoading
 import Annotations
 import Avail
+import Panic
 import Brisk.Pretty
 import Brisk.Model.GhcInterface
 import Brisk.Model.EmbedCore
@@ -59,6 +60,7 @@ runBrisk bs mg binds
        annEnv       <- loadBriskAnns hsenv mg
        let specMods = specModules mg annEnv
        let go (SpecTable entries) mod =
+
              do (SpecTable entries') <- retrieveSpecs hsenv mod
                 return (SpecTable (entries ++ entries'))
        specs0       <- retrieveAllSpecs hsenv mg
@@ -79,7 +81,7 @@ runBrisk bs mg binds
            withExceptions act
              = catch (act >>= return . return) handleUserError
            handleUserError e@(ErrorCall _)
-             = putStrLn (displayException e) >> return Nothing
+             = throwGhcException (ProgramError (displayException e))
 
 specModules :: ModGuts -> AnnEnv -> [Module]
 specModules mg annEnv

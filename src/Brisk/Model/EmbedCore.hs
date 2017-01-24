@@ -52,20 +52,14 @@ retrieveAllSpecs env mg
 type WordList = [Word]
 retrieveSpecs :: HscEnv -> Module -> CoreM SpecTableIn
 retrieveSpecs env mod
-  = do origNm <- liftIO . initTcForLookup env $ do
-         nm <- lookupOrig mod tabOccName
-         liftIO $ putStrLn "yes it exists"
-         return nm
+  = do origNm <- liftIO . initTcForLookup env $
+         lookupOrig mod tabOccName
        specTableTy  <- tyFromName env ''WordList
-       liftIO $ do
-         linkModule env mod
-         v <- getHValue env origNm
-         wordsToSpecTable <$> (lessUnsafeCoerce unsafeGlobalDynFlags "retrieve" v)
-       -- words <- liftIO $ getValueSafely env origNm specTableTy :: CoreM (Maybe [Word])
-       -- liftIO $ putStrLn "words"
-       -- case words of
-       --   Nothing -> abort "retrieveSpecs" ":("
-         -- Just words' -> return (wordsToSpecTable words')
+       words <- liftIO $ getValueSafely env origNm specTableTy :: CoreM (Maybe [Word])
+       liftIO $ putStrLn "words"
+       case words of
+         Nothing -> abort "retrieveSpecs" ":("
+         Just words' -> return (wordsToSpecTable words')
 
 -------------------------------------------
 -- Functions for *embedding* specifications

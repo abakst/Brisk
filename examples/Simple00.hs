@@ -2,7 +2,7 @@
 {-# OPTIONS_GHC -fplugin-opt Brisk.Plugin:main #-}
 module Simple00 where
 import Control.Distributed.Process
-import GHC.Base.Brisk
+import ImportMe
 
 main :: Process () 
 main = do p <- getSelfPid
