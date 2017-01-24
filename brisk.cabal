@@ -23,9 +23,9 @@ library
   exposed-modules:   Brisk.Plugin
                    , Brisk.UX
                    , Brisk.Annotations
-                   , Brisk.Transform.SpanStack
-                   , Brisk.Transform.Misc
-                   , Brisk.Transform.ANF
+                   -- , Brisk.Transform.SpanStack
+                   -- , Brisk.Transform.Misc
+                   -- , Brisk.Transform.ANF
                    , Brisk.Pretty
                    , Brisk.Model.Env
                    , Brisk.Model.Spec
@@ -38,12 +38,10 @@ library
                    , Brisk.Model.IceT
                    , Brisk.Model.GhcInterface
 
+                  -- , Control.Distributed.Process.Internal.Primitives.Brisk
                    , Control.Distributed.Process.SymmetricProcess
-                   , Control.Distributed.Process.Internal.Primitives.Brisk
                    , Control.Distributed.BriskStatic
                    , Control.Distributed.BriskStatic.Internal
-
-                   , GHC.Base.Brisk
 
   other-modules:   Paths_brisk
 

@@ -17,7 +17,7 @@ import Text.Show.Pretty (ppShow)
 
 import qualified Data.Set as Set
 import qualified Brisk.Model.Env as Env
-import           Brisk.Transform.ANF
+-- import           Brisk.Transform.ANF
 import           Brisk.Model.GhcInterface
 import           Brisk.Model.Types
 import           Brisk.Model.Spec
