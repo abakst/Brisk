@@ -6,32 +6,32 @@ import Data.Maybe
 import Brisk.Model.Types
 import Brisk.Model.GhcInterface
 
+($->$) b e = ELam b e ()
+infixr $->$
+
+($>>=$) e1 e2 = EPrimOp Bind [e1,e2] ()
+ret e = EPrimOp Return [e] ()
+v x = EVar x ()
+
 thenWiredIn :: EffExpr Id ()       
-thenWiredIn = a $->$ b $->$ m $->$ n $->$ EBind (EVar m ()) (ELam "_" (EVar n ()) ()) ()
-  where
-    m = "m"
-    n = "n"
-    a = "a"
-    b = "b"
+thenWiredIn
+  = "a" $->$ "b" $->$ "m" $->$ "n" $->$ (v "m" $>>=$ ("_" $->$ v "n"))
 
 bindWiredIn :: EffExpr Id ()
 bindWiredIn
-  = a $->$ b $->$ m $->$ n $->$ EBind (EVar m ()) (EVar n ()) ()
-  where
-    m = "$m"
-    n = "$n"
-    a = "$a"
-    b = "$b"
+  = "a" $->$ "b" $->$ "m" $->$ "n" $->$ (v "m" $>>=$ v "n")
 
 returnWiredIn :: EffExpr Id ()
 returnWiredIn
-  = a $->$ e $->$ EReturn (var e ()) ()
-  where
-    a = "a"
-    e = "e"
+  = "a" $->$ "e" $->$ ret (v "e")
+
+failWiredIn :: EffExpr Id ()
+failWiredIn
+  = "a" $->$ "e" $->$ (EPrimOp Fail [] ())
 
 monadBuiltin =  [ (bindMName, bindWiredIn)
                 , (thenMName, thenWiredIn)
+                , (failMName, failWiredIn)
                 , (returnMName, returnWiredIn)
                 ]   
 pidType :: Type Id
@@ -49,9 +49,10 @@ builtin = SpecTable [
     ELam "t" (
         ELam "p" (
             ELam "m" (
-                Send (EType (TyVar "t") Nothing)
-                (EVar "p" (Just pidType))
-                (EVar "m" (Just (TyVar "t")))
+                EPrimOp Send [ EType (TyVar "t") Nothing
+                             , EVar "p" (Just pidType)
+                             , EVar "m" (Just (TyVar "t"))
+                             ]
                 (Just (procType unitType))
                 ) (Just $ TyFun (TyVar "t") (procType unitType))
             ) (Just $ TyFun pidType (TyFun (TyVar "t") (procType unitType)))
@@ -59,13 +60,52 @@ builtin = SpecTable [
 
   , "Control.Distributed.Process.Internal.Primitives.getSelfPid"
     :<=:
-    Self (Just (procType pidType))
+    EPrimOp Self [] (Just (procType pidType))
     
   , "Control.Distributed.Process.Internal.Primitives.expect"
     :<=:
-    ELam "t" (Recv (EType (procType (TyVar "t")) Nothing)
-                   (Just  (procType (TyVar "t"))))
+    ELam "t" (EPrimOp Recv [EType (procType (TyVar "t")) Nothing]
+              (Just  (procType (TyVar "t"))))
              Nothing
+
+  , "Control.Distributed.Process.SymmetricProcess.spawnSymmetric"
+    :<=:
+    ELam "nodes" (
+      ELam "p" (
+          (EPrimOp SymSpawn [EVar "p" Nothing] (Just (procType (TyConApp "Control.Distributed.Process.SymmetricProcess.SymProcessSet" [] ))))
+          ) Nothing
+       ) Nothing
+
+  , "Control.Distributed.BriskStatic.Internal.castEffect"
+    :<=:
+    ELam "a" (ELam "b"
+      (ELam "x" (ELam "y" (EVar "y" Nothing) Nothing) Nothing)
+      Nothing) Nothing
+
+  , "GHC.Err.error"
+    :<=:
+    ELam "a" (ELam "s" (EPrimOp Fail [] (Just (TyVar "a"))) Nothing) Nothing
+
+  , "Control.Monad.foldM"
+    :<=:
+    ELam "t" (
+      ELam "m" (
+          ELam "b" (
+              ELam "a" (
+                  ELam "f" (
+                      ELam "base" (
+                          ELam "xs" (
+                              EPrimOp FoldM [ EVar "f" Nothing
+                                            , EVar "base" Nothing
+                                            , EVar "xs" Nothing
+                                            ] (Just (TyVar "b"))
+                              ) Nothing
+                          ) Nothing
+                      ) Nothing
+                  ) Nothing
+              ) Nothing
+          ) Nothing
+      ) Nothing
   ]
 {-
 builtin :: [(String, String, EffExpr Id ())]

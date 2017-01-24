@@ -134,31 +134,28 @@ fromEffExp :: (Show a, HasType a)
            -> Maybe E.Id
            -> ITM a (IceTStmt a, Maybe (IceTExpr a))
 ---------------------------------------------------
-fromEffExp s (E.Recv (E.EType t _) l) x
+fromEffExp s (E.EPrimOp E.Recv [E.EType t _] l) x
   = return (Recv t x, flip E.EVar l <$> x)
 
-fromEffExp s (E.Send (E.EType t _) p m l) x
+fromEffExp s (E.EPrimOp E.Send [E.EType t _, p, m] l) x
   = do to  <- fromPure s p
        msg <- fromPure s m
        return (Send t to msg, flip E.EVar l <$> x)
 
-fromEffExp s (E.Spawn p l) x
+fromEffExp s (E.EPrimOp E.Spawn [p] l) x
   = fromSpawn l s p x
 
-fromEffExp s (E.SymSpawn xs p l) x
+fromEffExp s (E.EPrimOp E.SymSpawn [xs, p] l) x
   = fromSymSpawn l s xs p x
 
-fromEffExp s (E.EBind e1 (E.ELam x e2 l2) l1) y
+fromEffExp s (E.EPrimOp E.Bind [e1, E.ELam x e2 l2] l1) y
   = fromBind s l1 l2 e1 x e2 y
 
-fromEffExp s (E.EReturn e _) y
+fromEffExp s (E.EPrimOp E.Return [e] _) y
   = do e' <- fromPure s e
        return (Skip, Just e')
 
-fromEffExp s (E.EProcess p e l) y
-  = fromProcess l s p y
-
-fromEffExp s (E.Self l) _
+fromEffExp s (E.EPrimOp E.Self [] l) _
   = do me <- gets current
        return (Skip, Just (E.EVar [me] (setType t' l)))
          where

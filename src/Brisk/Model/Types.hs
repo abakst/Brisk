@@ -26,7 +26,7 @@ import BasicTypes (Arity)
 import TyCon
 import DataCon
 import Data.Data
-import Data.Serialize
+import Data.Serialize hiding (Fail)
 import qualified Data.ByteString as B
 import qualified Type as T
 import qualified TypeRep as Tr
@@ -60,11 +60,6 @@ data Op = Eq | Le | NEq | Plus | Minus
         deriving (Eq, Show)
 
 litInt i a = EVal (Just (CInt (fromInteger i))) a
-pVar v a      = PEffect (var v a)
-pInt v i a    = (v, intTy, Rel Eq (pVar v a) (PConst (CInt i)))
-pSingle v x a = pVar v `eSingle` pVar x a
-eSingle v e a = (v, Rel Eq (pVar v a) e)
-pExpr v o e a = (v, Rel o (pVar v a) e)
 ePlus  = Rel Plus
 eMinus = Rel Minus
 
@@ -118,8 +113,10 @@ data EffExpr b a =
 instance (Serialize b, Serialize a) => Serialize (EffExpr b a)
 
 data PrimOp = Bind | Return | Fail | FoldM
-            | Send | Recv | Self | Die
+            | Send | Recv | Self
             | Spawn | SymSpawn
+            deriving (Eq, Show, Generic)
+instance Serialize PrimOp
 
 type Process b a  = EffExpr b a
 type EffType b a  = EffExpr b a
@@ -206,18 +203,11 @@ simplify (EApp e1 e2 l)
     e1' = simplify e1
     e2' = simplify e2 
 simplify (EPrimOp op args l) = EPrimOp op (simplify <$> args) l
-simplify (EBind e1 e2 l) = EBind (simplify e1) (simplify e2) l
 simplify (ECon c xs l)   = ECon c (simplify <$> xs) l
 simplify (ELam b e l)    = ELam b (simplify e) l
-simplify (EReturn e l)   = EReturn (simplify e) l
-simplify (Send t p m l)  = Send t (simplify p) (simplify m) l
-simplify (Spawn p l)     = Spawn (simplify p) l
-simplify r@Recv{}        = r
 simplify t@EType{}       = t
 simplify x@EVar{}        = x
-simplify s@Self{}        = s
 simplify v@EVal{}        = v
-simplify e = abort "simplify" e
 
 simplifyCaseApp :: forall a b. (Show a, Show b, Subst b (EffExpr b a))
                 => Type b
@@ -292,11 +282,18 @@ instance (Pretty b, Eq b) => Pretty (EffExpr b a) where
   ppPrec z (EApp e1 e2 _)
     = parensIf (z > 8) (ppPrec 8 e1 <+> ppPrec 9 e2)
   ppPrec z f@(ELam _ _ _)
-    = parensIf (z > 7) (text "\\" <> spaces xs <+> text "->" $$ nest 2 (ppPrec 7 e))
+    -- = parensIf (z > 7) (text "\\" <> spaces xs <+> text "->" $$ nest 2 (ppPrec 7 e))
+    = parens (text "\\" <> spaces xs <+> text "->" $$ nest 2 (ppPrec 7 e))
     where
       (xs, e)         = collectArgs f
-  ppPrec z (EReturn e _)
-    = text "return" <+> ppPrec z e
+  ppPrec z (EPrimOp Bind [e1, e2] _) = text "do" <+> nest 3 (vcat (body e1 e2))
+    where
+      body e1 (ELam b e2 _) = [pp b <+> text "<-" <+> pp e1] ++ go e2
+      body e1 e2            = [pp e1, pp e2]
+      go (EPrimOp Bind [e1,e2] _) = body e1 e2
+      go e                        = [pp e]
+  ppPrec z (EPrimOp o args _)
+    = ppPrec 0 o <> tuple (ppPrec 0 <$> args)
   ppPrec z (ERec b f@(ELam _ _ _) _)
     = text "letrec" <+> ppPrec z b <+> spaces xs <+> equals <+> ppPrec 0 e $$ text "in" <+> ppPrec z b
     where
@@ -308,25 +305,21 @@ instance (Pretty b, Eq b) => Pretty (EffExpr b a) where
           <+> ppPrec 8 b <+> ppPrec 8 x0)
   ppPrec z (ERec b e _)
     = text "letrec" <+> ppPrec z b <+> equals <+> ppPrec 0 e $$ text "in" <+> ppPrec z b
-    -- = text "rec" <+> ppPrec z b <> text "." $$ nest 2 (ppPrec z e)
+  ppPrec _ (EType t _)      = text "@" <> pp t
 
+instance Pretty PrimOp where
+  ppPrec _ Self     = text "$self"
+  ppPrec _ Send     = text "$send"
+  ppPrec _ Recv     = text "$recv"
+  ppPrec _ Spawn    = text "$spawn"
+  ppPrec _ SymSpawn = text "$symSpawn"
+  ppPrec _ Return   = text "$return" 
+  ppPrec _ Bind     = text "$bind"
+  ppPrec _ Fail     = text "$fail"
+  ppPrec _ FoldM    = text "$foldM"
 
-  ppPrec z (EBind e1 e2 _) = text "do" <+> nest 3 (vcat (body e1 e2))
-    where
-      body e1 (ELam b e2 _) = [pp b <+> text "<-" <+> pp e1] ++ go e2
-      -- body e1 (ELam b e2 _) = pp b <+> text "<-" <+> pp e1 $$ go e2
-      body e1 e2            = [pp e1, pp e2]
-      -- body e1 e2            = pp e1 $$ pp e2
-      go (EBind e1 e2 _)    = body e1 e2
-      go e                  = [pp e]
-  
-  ppPrec _ (EProcess p e _) = pp p <> brackets (pp e)
-  ppPrec _ (Send t p m _)   = text "$send"  <> brackets (pp t) <> parens (hcat (punctuate comma [pp p, pp m]))
-  ppPrec _ (Recv t _)       = text "$expect"  <> brackets (pp t)
-  ppPrec _ (Spawn p _)      = text "$spawn" <> parens (parens (pp p))
-  ppPrec _ (SymSpawn xs p _)= text "$symSpawn" <> (parens (pp xs <> comma <+> pp p))
-  ppPrec _ (Self _)         = text "$getSelfPid"
-  ppPrec _ (EType t _)      = pp t
+tuple :: [Doc] -> Doc  
+tuple xs = parens (hcat (punctuate comma xs))
 
 instance Pretty Const where
   ppPrec _ (CInt i) = int i
@@ -419,31 +412,14 @@ substExpr b x a = go
         = ECase t (go e) (substAlt x a <$> es) (go <$> d) l
       go (EApp e1 e2 l)
         = EApp (go e1) (go e2) l
-      go (EReturn e l)
-        = EReturn (go e) l
-      go (EBind e1 e2 l)
-        = EBind (go e1) (go e2) l
-      go (EProcess p e l)
-        = EProcess (substExpr b x a p) (go e) l
-
-      go (Send t p m l)   = Send (go t) (go p) (go m) l
-      go (Recv t l)       = Recv (go t) l
-      go (Spawn p l)      = Spawn (go p) l
-      go (Self l)         = Self l
-      go (SymSpawn e p l) = SymSpawn (go e) (go p) l
+      go (EPrimOp o es l)
+        = EPrimOp o (go <$> es) l
       go ty@(EType t l)
         = case a of
             EType t' l' -> EType (subst x t' t)  l
             _           -> ty
 
-      -- substPred _ _ PTrue        = PTrue
-      -- substPred x a (PVal n ps)  = PVal n (substPred x a <$> ps)
-      -- substPred _ _ p@(PConst _) = p
-      -- substPred x a (Rel o p1 p2) = Rel o (substPred x a p1) (substPred x a p2)
-      -- substPred x a (PEffect e)   = PEffect (substExpr b x a e)
-
 fvExpr :: (Avoid b, Annot a, ToTyVar b, Ord b) => EffExpr b a -> Set.Set b
--- fvExpr (EVal (b,_,p) _) = fvPred p Set.\\ Set.singleton b
 fvExpr (EVal _ _)      = Set.empty
 fvExpr (EVar x _)      = Set.singleton x
 fvExpr (ECon x as _)   = Set.unions (fv <$> as)
@@ -456,14 +432,7 @@ fvExpr (ECase t e es d l)= Set.unions ([fv e] ++ fvDefault d ++ fmap fvAlts es)
     fvDefault Nothing   = []
     fvDefault (Just e)  = [fv e]
 fvExpr (EApp e1 e2 _)   = fv e1 `Set.union` fv e2
-fvExpr (EReturn e _ )   = fv e
-fvExpr (EBind e1 e2 _)  = fv e1 `Set.union` fv e2
-fvExpr (EProcess p e _) = fv p `Set.union` fv e
-fvExpr (Send t p m l)   = fv p `Set.union` fv m
-fvExpr (Recv _ _)       = Set.empty
-fvExpr (Spawn p _)      = fv p
-fvExpr (SymSpawn e p _) = fv e `Set.union` fv p
-fvExpr (Self _)         = Set.empty
+fvExpr (EPrimOp o es _) = Set.unions (fv <$> es)
 fvExpr (EType t _)      = Set.empty
 
 fvAlts :: (Avoid b, Annot a, ToTyVar b, Ord b) => (b, [b], EffExpr b a) -> Set.Set b
@@ -475,26 +444,6 @@ fvPred (Rel _ p1 p2) = fvPred p1 `Set.union` fvPred p2
 fvPred (PEffect e)   = fv e
 fvPred PTrue         = Set.empty
 fvPred (PConst _)    = Set.empty
-
--- caSubst :: (Annot a, Avoid b, Subst b a) => b -> EffExpr b a -> EffExpr b a -> EffExpr b a
--- caSubst x t' e@(ELam y t a)
---   | x == y    = e
---   | otherwise = 
---   where
---     y' = avoid (fv t') y
--- caSubst x t' (ELam y t a)
---   = undefined
-
--- avoidFvs :: (Annot a, Avoid b, Subst b a,  Ord b) => Set.Set b -> EffExpr b a -> EffExpr b a  
--- avoidFvs fvs (ELam x t a)
---   = ELam y (caSubst x (EVar y noAnnot) t) a
---   where
---     y = avoid fvs x
--- avoidFvs fvs (ERec x t a)
---   = ERec y (caSubst x (EVar y noAnnot) t) a
---   where
---     y = avoid fvs x
--- avoidFvs fvs (
 
 class Avoid b where
   avoid :: Set.Set b -> b -> b

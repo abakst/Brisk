@@ -55,8 +55,7 @@ retrieveSpecs env mod
   = do origNm <- liftIO . initTcForLookup env $
          lookupOrig mod tabOccName
        specTableTy  <- tyFromName env ''WordList
-       words <- liftIO $ getValueSafely env origNm specTableTy :: CoreM (Maybe [Word])
-       liftIO $ putStrLn "words"
+       words <- liftIO $ getValueSafely env origNm specTableTy
        case words of
          Nothing -> abort "retrieveSpecs" ":("
          Just words' -> return (wordsToSpecTable words')

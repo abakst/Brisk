@@ -1,14 +1,15 @@
 {-# LANGUAGE TupleSections #-}
+{-# LANGUAGE MagicHash #-}
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 module Brisk.Plugin (plugin) where
 
 import Unique
+import GHC.CString (unpackCString#)
 import GhcPlugins hiding (Id)
 import System.FilePath.Find
 import Paths_brisk
 import Brisk.Model.Extract
-import Brisk.Model.Spec
 import Control.Exception
 import Data.Maybe
 import Data.List (nub)
@@ -90,17 +91,6 @@ specModules mg annEnv
     imports   = fst <$> (moduleEnvToList $ mg_dir_imps mg)
     isSpecMod = not . null . lookupAnns annEnv ModuleTarget
 
--- exportedSpecNames :: ModGuts -> AnnEnv -> [Name] -> _
--- exportedSpecNames mg annEnv ns
---   = undefined
--- assumedAnns :: [(Id, Name)] -> SpecTableOut -> CoreM SpecTableOut
--- assumedAnns assumed (SpecTable specs) 
---   = SpecTable <$> (forM es $ \(x,t) -> do
---                      Just x' <- thNameToGhcName x
---                      return (nameId x' :<=: t))
---   where
---     es = [ (lookup x assumed, t) | x :<=: t <- specs ]
-
 foo :: ModGuts -> SpecTableOut -> AnnEnv -> CoreM (SpecTableOut, [Name])
 foo mg (SpecTable specs) annEnv
   = do let exported = [(nameId n, n') | Avail n   <- mg_exports mg
@@ -126,11 +116,3 @@ isModuleSpec mg units
   = elemUFM uniq units
   where
     uniq = getUnique . moduleName $ mg_module mg
-
-readSpecFiles :: HscEnv -> ModGuts -> IO [Spec]
-readSpecFiles env mg
-  = do specs <- getSpecFiles
-       concat <$> mapM (parseSpecFile env mg) specs
-       
-getSpecFiles :: IO [String]
-getSpecFiles = find always (extension ==? ".espec") =<< getDataDir

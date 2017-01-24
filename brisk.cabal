@@ -28,8 +28,7 @@ library
                    -- , Brisk.Transform.ANF
                    , Brisk.Pretty
                    , Brisk.Model.Env
-                   , Brisk.Model.Spec
-                   , Brisk.Model.Types
+                    Brisk.Model.Types
                    , Brisk.Model.Extract
                    , Brisk.Model.Builtins
                    , Brisk.Model.Prolog
@@ -54,6 +53,7 @@ library
                      , binary
                      , bytestring
                      , ghc
+                     , ghc-prim
                      , containers
                      , cereal
                      , generic-deriving

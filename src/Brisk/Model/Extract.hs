@@ -20,7 +20,6 @@ import qualified Brisk.Model.Env as Env
 -- import           Brisk.Transform.ANF
 import           Brisk.Model.GhcInterface
 import           Brisk.Model.Types
-import           Brisk.Model.Spec
 import           Brisk.Model.Builtins
 import           Brisk.Model.Prolog
 -- import           Brisk.Model.Promela
@@ -112,7 +111,6 @@ runMGen bs hsenv mg specs prog
     go :: EffMap -> CoreProgram -> MGen EffMap
     go                     = foldM mGenBind
     findModuleNameId b     = nameId <$> lookupName hsenv (mg_module mg) b
-    specTuple (Spec m x e) = (intercalate "." m, x, e)
 
 dumpBinds :: [(Id, AbsEff)] -> IO ()
 dumpBinds binds
@@ -260,52 +258,9 @@ substIf x xs a
   | x `Set.member` xs = subst x a
   | otherwise         = id
 
-alphaRename :: Set.Set Id -> AbsEff -> MGen AbsEff
-alphaRename xs (EPrRec x y f b e0 l)
-  | x `elem` xs
-  = do x' <- freshVar
-       alphaRename xs $ subst x (EVar x' l) (EPrRec x' y f b e0 l)
-  | y `elem` xs
-  = do y' <- freshVar
-       alphaRename xs $ subst y (EVar y' l) (EPrRec x y f b e0 l)
-  | otherwise
-  = do  f'  <- alphaRename xs f
-        b'  <- alphaRename xs b
-        e0' <- alphaRename xs e0
-        return (EPrRec x y f' b' e0' l)
-       
-alphaRename xs (ERec f a l)
-  | f `elem` xs = do f' <- freshVar
-                     a' <- alphaRename xs a 
-                     return $ ERec f' (subst f (EVar f' l) a') l
-  | otherwise   = ERec f <$> alphaRename xs a <*> pure l
-alphaRename xs (ELam x a l)
-  | x `elem` xs = do x' <- freshVar
-                     a' <- alphaRename xs a
-                     return $ ELam x' (subst x (EVar x' l) a') l
-  | otherwise   = ELam x <$> alphaRename xs a <*> pure l
-alphaRename xs (EApp a1 a2 l)
-  = do a1' <- alphaRename  xs a1
-       a2' <- alphaRename  xs a2
-       return (EApp a1' a2' l)
-alphaRename xs (ECase t e es d l)
-  = ECase t <$> alphaRename xs e <*> mapM go es <*> mapM (alphaRename xs) d <*> pure l
-  where
-    go (c,ys,e) = do ys' <- mapM (const freshVar) ys
-                     e'  <- alphaRename xs e
-                     let e'' = foldl go1 e' (zip ys ys')
-                     return (c, ys', e'')
-    go1 :: AbsEff -> (Id, Id) -> AbsEff
-    go1 e (x,x') = subst x (EVar x' l) e
-alphaRename xs (EReturn e l)
-  = do e' <- alphaRename xs e
-       return $ EReturn e' l
-alphaRename xs e = return e -- Lazy
-
-freshVar :: MGen Id  
-freshVar = do c <- gets cnt
-              modify $ \s -> s { cnt = c + 1 }
-              return ("x" ++ show c)
+var :: Id -> a -> EffExpr Id a
+var = EVar   
+lam = ELam  
 
 mGenCaseAlts :: EffMap -> [CoreAlt] -> MGen [(Id, [Id], AbsEff)]
 mGenCaseAlts g = mapM go
