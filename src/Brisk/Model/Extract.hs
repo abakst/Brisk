@@ -105,8 +105,8 @@ runMGen bs hsenv mg specs prog
        --   putStrLn (show x ++ " :=\n" ++ ppShow e)
        -- forM_ binds' $ \(x, e) ->
        --   putStrLn (show x ++ " :=\n" ++ runPromela e)
-       forM_ binds $ 
-         putStrLn . toBriskString . snd
+       -- forM_ binds $ 
+       --   putStrLn . toBriskString . snd
        return $ SpecTable [ x :<=: e | (x,e) <- binds ]
   where
     go :: EffMap -> CoreProgram -> MGen EffMap

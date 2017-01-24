@@ -102,33 +102,41 @@ data EffExpr b a =
            }
  | EType   { typeTy :: Type b, annot :: a }
  -- Processes
- | EProcess { procProc :: Process b a, procRet :: EffExpr b a, annot :: a }
- | EBind    { bindFst :: EffExpr b a, bindSnd :: EffExpr b a, annot :: a }
- | EReturn  { retExp :: EffExpr b a, annot :: a }
- | Send     { sendTy :: EffType b a, sendPid :: EffExpr b a, sendMsg :: EffExpr b a, annot ::  a } -- ^ send(type, p, msg)
- | Recv     { recvTy :: EffType b a, annot :: a }
- | Spawn    { spawnProc :: Process b a, annot :: a }
- | SymSpawn { symSpawnSet :: EffExpr b a, symSpawnProc :: Process b a, annot ::  a } -- ^ symspawn(xs, p)
- | Self     { annot :: a }
+ | EPrimOp { primOp   :: PrimOp
+           , primArgs :: [EffExpr b a]
+           , annot    :: a
+           }
+ -- | EProcess { procProc :: Process b a, procRet :: EffExpr b a, annot :: a }
+ -- | EBind    { bindFst :: EffExpr b a, bindSnd :: EffExpr b a, annot :: a }
+ -- | EReturn  { retExp :: EffExpr b a, annot :: a }
+ -- | Send     { sendTy :: EffType b a, sendPid :: EffExpr b a, sendMsg :: EffExpr b a, annot ::  a } -- ^ send(type, p, msg)
+ -- | Recv     { recvTy :: EffType b a, annot :: a }
+ -- | Spawn    { spawnProc :: Process b a, annot :: a }
+ -- | SymSpawn { symSpawnSet :: EffExpr b a, symSpawnProc :: Process b a, annot ::  a } -- ^ symspawn(xs, p)
+ -- | Self     { annot :: a }
    deriving (Eq, Show, Generic, Functor)
 instance (Serialize b, Serialize a) => Serialize (EffExpr b a)
+
+data PrimOp = Bind | Return | Fail | FoldM
+            | Send | Recv | Self | Die
+            | Spawn | SymSpawn
 
 type Process b a  = EffExpr b a
 type EffType b a  = EffExpr b a
 type PureExpr b a = EffExpr b a
 
--- | Convenient Syntax
-var = EVar
-lam = ELam
-app = EApp
-ret = EReturn
-fix = ERec
-bind = EBind
-x $>>$ y    = bind x y ()
-x $->$ y    = lam x y ()
-x $@$ y     = app x y ()
-infixr $->$
-infixl $@$
+-- -- | Convenient Syntax
+-- var = EVar
+-- lam = ELam
+-- app = EApp
+-- ret = EReturn
+-- fix = ERec
+-- bind = EBind
+-- x $>>$ y    = bind x y ()
+-- x $->$ y    = lam x y ()
+-- x $@$ y     = app x y ()
+-- infixr $->$
+-- infixl $@$
 
 ----------------------------------------------- 
 -- | Type Conversion 
@@ -197,6 +205,7 @@ simplify (EApp e1 e2 l)
   where
     e1' = simplify e1
     e2' = simplify e2 
+simplify (EPrimOp op args l) = EPrimOp op (simplify <$> args) l
 simplify (EBind e1 e2 l) = EBind (simplify e1) (simplify e2) l
 simplify (ECon c xs l)   = ECon c (simplify <$> xs) l
 simplify (ELam b e l)    = ELam b (simplify e) l
@@ -207,6 +216,7 @@ simplify r@Recv{}        = r
 simplify t@EType{}       = t
 simplify x@EVar{}        = x
 simplify s@Self{}        = s
+simplify v@EVal{}        = v
 simplify e = abort "simplify" e
 
 simplifyCaseApp :: forall a b. (Show a, Show b, Subst b (EffExpr b a))
