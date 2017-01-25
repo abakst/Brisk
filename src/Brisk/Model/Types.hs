@@ -11,6 +11,7 @@
 module Brisk.Model.Types where
 
 import GhcPlugins (SrcSpan, showSDoc, unsafeGlobalDynFlags, ppr)
+import Data.Maybe
 import Brisk.Pretty
 import GHC.Generics
 import Brisk.UX
@@ -167,17 +168,20 @@ substs froms tos e
   where
     go e (x,a) = subst x a e
 
-simplify :: (Show a, Show b, Subst b (EffExpr b a)) => EffExpr b a -> EffExpr b a
+simplify :: (Show a, Show b, Subst b (EffExpr b a))
+         => EffExpr b a -> EffExpr b a
 simplify (ECase t e alts md l)
-  = case (e, alts) of
-      (ECon c xs _, [(c', xs', eAlt)])
-        | c == c' && length xs == length xs'
-          -> substs xs' xs eAlt
-      _   -> ECase t e' alts' md' l
+  = fromMaybe defCase $ simplifyCasesMaybe e' alts'
+  -- = case (e', alts') of
+  --     (ECon c xs _, [(c', xs', eAlt)])
+  --       | c == c' && length xs == length xs'
+  --         -> substs xs' xs eAlt
+  --     _   -> ECase t e' alts' md' l
   where
-    e'    = simplify e
-    alts' = map (\(x,y,z) -> (x,y,simplify z)) alts
-    md'   = simplify <$> md
+    defCase = ECase t e' alts' md' l
+    e'      = simplify e
+    alts'   = map (\(x,y,z) -> (x,y,simplify z)) alts
+    md'     = simplify <$> md
     
 simplify (EField e i l')
   = case e' of
@@ -204,6 +208,18 @@ simplify t@EType{}       = t
 simplify x@EVar{}        = x
 simplify v@EVal{}        = v
 simplify a@EAny{}        = a
+
+simplifyCasesMaybe :: (Show a, Show b, Subst b (EffExpr b a))
+                   => EffExpr b a
+                   -> [(b,[b],EffExpr b a)]
+                   -> Maybe (EffExpr b a)
+simplifyCasesMaybe e@(ECon c xs _) ((c', xs', alt):alts)
+  | c == c' && length xs == length xs'
+  = Just $ simplify $ substs xs' xs alt
+  | otherwise
+  = simplifyCasesMaybe e alts
+simplifyCasesMaybe _ _
+  = Nothing
 
 simplifyCaseApp :: forall a b. (Show a, Show b, Subst b (EffExpr b a))
                 => Type b

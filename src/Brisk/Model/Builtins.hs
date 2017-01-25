@@ -106,6 +106,10 @@ builtin = SpecTable [
               ) Nothing
           ) Nothing
       ) Nothing
+
+    , "Brisk.Annotations.top"
+      :<=:
+      ELam "a" (EAny (EType (TyVar "a") Nothing) Nothing) Nothing
   ]
 {-
 builtin :: [(String, String, EffExpr Id ())]

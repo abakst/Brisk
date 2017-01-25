@@ -5,6 +5,7 @@ module Brisk.Model.Extract where
 
 import GHC (GhcMonad)
 import GhcPlugins          hiding ((<+>), pp, text, Subst, Id, mkTyVar)
+import qualified GhcPlugins as Ghc
 import Type                as Ty
 import TypeRep             as Tr
 import Name
@@ -118,6 +119,8 @@ isPure t
   = do ty <- gets procTy
        return $ go ty t
   where
+    go t (Tr.TyVarTy t')     = True
+    go t (Tr.LitTy _)        = True
     go t (Tr.AppTy t1 t2)    = True
     go t (Tr.TyConApp tc ts) = cmp t tc
     go t (Tr.FunTy _ t')     = go t t'
@@ -189,7 +192,7 @@ mGenExpr' g (Var x)
   | otherwise
   = do pure <- isPure (idType x)
        s    <- currentSpan
-       if pure then
+       if False {- pure -} then
           return $ defaultEffExpr (Nothing, s) (idType x)
        else
           return $ var (bindId x) (annotOfBind x)
@@ -208,7 +211,7 @@ mGenExpr' g abs@(Lam b e)
          where
            n = bindId b
 
-mGenExpr' g (App e e')
+mGenExpr' g exp@(App e e')
   | not (isTypeArg e') && isDictTy (exprType e')
   = mGenExpr g e
 mGenExpr' g e@(App (Var i) l)
@@ -220,13 +223,15 @@ mGenExpr' g e@(App e1@(Var f) e2@(Type t))
   = do a <- mGenMonadOp f tc
        annotType e <$> maybe defApp return a
          where
+           sub    = GhcPlugins.extendTvSubst emptySubst f t
            defApp = do eff1 <- mGenExpr g e1
+                       -- eff2 <- mGenExpr g (GhcPlugins.substExpr (Ghc.text "App") sub e2)
                        eff2 <- mGenExpr g e2
                        mGenApp g eff1 eff2
 mGenExpr' g e@(App e1 e2)
   = do ef1 <- mGenExpr g e1
        ef2 <- mGenExpr g e2
-       annotType e <$> mGenApp g ef1 ef2
+       simplify . annotType e <$> mGenApp g ef1 ef2
 
 mGenExpr' g e@(Case e' _ t alts)
   = do a     <- mGenExpr g e'
@@ -235,7 +240,7 @@ mGenExpr' g e@(Case e' _ t alts)
        s     <- currentSpan
        let tCase = exprEType e'
            tExp  = exprEType e
-       return $ ECase tCase a as defA (Just tExp, s)
+       return . simplify $ ECase tCase a as defA (Just tExp, s)
          where
            (alts', def) = findDefault alts
 
@@ -254,7 +259,7 @@ mGenApp :: EffMap -> AbsEff -> AbsEff -> MGen AbsEff
 mGenApp g e@ECon {} (EType _ _)
   = return e
 mGenApp g e@ECon {} a
-  = return (e `apConEff` a)
+  = return $ simplify (e `apConEff` a)
 mGenApp g a@(ELam x m _) a2
   = return . simplify $ subst x a2 m
   -- = do ELam x a1 _ <- alphaRename (fv a2) a
@@ -283,7 +288,9 @@ mGenCaseAlts :: EffMap -> [CoreAlt] -> MGen [(Id, [Id], AbsEff)]
 mGenCaseAlts g = mapM go
   where
     go (DataAlt c, bs, e)
-      = do let g' = Env.addsEnv g [ (bindId b, var (bindId b) (annotOfBind b)) | b <- bs ]
+      = do let g' = Env.addsEnv g [ (bindId b, var (bindId b) (annotOfBind b))
+                                  | b <- bs
+                                  ]
            a <- mGenExpr g' e
            return (bindId c, bindId <$> bs, a)
     go (LitAlt l, [], e)
