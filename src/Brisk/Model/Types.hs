@@ -27,6 +27,7 @@ import BasicTypes (Arity)
 import TyCon
 import DataCon
 import Data.Data
+import Data.Char
 import Data.Serialize hiding (Fail)
 import qualified Data.ByteString as B
 import qualified Data.ByteString.UTF8 as B8
@@ -135,6 +136,10 @@ ofType f = go
       = TyFun (go t1) (go t2)
     go (Tr.ForAllTy v t)
       = TyForAll (f . getName $ v) (go t)
+
+tyVarName :: String -> String    
+tyVarName (s0:s)
+  = toUpper s0:s
 
 -- (t1 (t2 (t3 t4)))
 splitAppTys (TyApp t1 t2) = (t1, reverse (go [] t2))

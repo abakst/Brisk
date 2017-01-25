@@ -4,7 +4,7 @@
 module Brisk.Model.Extract where
 
 import GHC (GhcMonad)
-import GhcPlugins          hiding ((<+>), pp, text, Subst, Id, mkTyVar)
+import GhcPlugins          hiding ((<+>), pp, text, Subst, Id, mkTyVar, tyVarName)
 import qualified GhcPlugins as Ghc
 import Type                as Ty
 import TypeRep             as Tr
@@ -73,7 +73,7 @@ noAnnot :: Functor f => f a -> f TyAnnot
 noAnnot = fmap (const dummyAnnot)
 
 specAnnot :: Maybe Ty.Type -> TyAnnot  
-specAnnot t = (ofType nameId <$> t, noSrcSpan)
+specAnnot t = (ofType (tyVarName . nameId) <$> t, noSrcSpan)
 
 annotType :: CoreExpr -> AbsEff -> AbsEff
 annotType e t = t { annot = a }
@@ -81,7 +81,7 @@ annotType e t = t { annot = a }
     a | isTypeArg e = annot t
       | otherwise   = (Just (exprEType e),  snd (annot t))
 
-exprEType = ofType nameId . exprType    
+exprEType = ofType (tyVarName . nameId) . exprType    
 
 liftAnnot t = (t, noSrcSpan)  
 
@@ -138,7 +138,7 @@ bindId :: NamedThing a => a -> Id
 bindId = nameId . getName
 
 annotOfBind x
-  = (Just . ofType nameId $ idType x, getSrcSpan x)
+  = (Just . ofType (tyVarName . nameId) $ idType x, getSrcSpan x)
 
 mGenBind :: EffMap -> CoreBind -> MGen EffMap 
 mGenBind g (NonRec x b)
@@ -174,7 +174,7 @@ mGenExpr' g (Tick _ e)
   = mGenExpr g e
 mGenExpr' g (Type t)
   = do s <- currentSpan
-       return (EType (ofType nameId t) (Nothing, s))
+       return (EType (ofType (tyVarName . nameId) t) (Nothing, s))
 mGenExpr' g exp@(Cast e _)
   = mGenExpr g e
 
@@ -225,7 +225,7 @@ mGenExpr' g e@(App e1@(Var f) e2@(Type t))
          where
            sub    = GhcPlugins.extendTvSubst emptySubst f t
            defApp = do eff1 <- mGenExpr g e1
-                       -- eff2 <- mGenExpr g (GhcPlugins.substExpr (Ghc.text "App") sub e2)
+                       eff2 <- mGenExpr g (GhcPlugins.substExpr (Ghc.text "App") sub e2)
                        eff2 <- mGenExpr g e2
                        mGenApp g eff1 eff2
 mGenExpr' g e@(App e1 e2)

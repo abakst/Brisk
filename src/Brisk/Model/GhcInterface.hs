@@ -181,4 +181,3 @@ usedModules = nub . mapMaybe nameModule_maybe . uniqSetToList . mg_used_names
 
 modUnique :: Module -> Unique
 modUnique = getUnique . moduleName 
-

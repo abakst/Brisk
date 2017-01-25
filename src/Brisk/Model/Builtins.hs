@@ -15,19 +15,19 @@ v x = EVar x ()
 
 thenWiredIn :: EffExpr Id ()       
 thenWiredIn
-  = "a" $->$ "b" $->$ "m" $->$ "n" $->$ (v "m" $>>=$ ("_" $->$ v "n"))
+  = "A" $->$ "B" $->$ "m" $->$ "n" $->$ (v "m" $>>=$ ("_" $->$ v "n"))
 
 bindWiredIn :: EffExpr Id ()
 bindWiredIn
-  = "a" $->$ "b" $->$ "m" $->$ "n" $->$ (v "m" $>>=$ v "n")
+  = "A" $->$ "B" $->$ "m" $->$ "n" $->$ (v "m" $>>=$ v "n")
 
 returnWiredIn :: EffExpr Id ()
 returnWiredIn
-  = "a" $->$ "e" $->$ ret (v "e")
+  = "A" $->$ "e" $->$ ret (v "e")
 
 failWiredIn :: EffExpr Id ()
 failWiredIn
-  = "a" $->$ "e" $->$ (EPrimOp Fail [] ())
+  = "A" $->$ "e" $->$ (EPrimOp Fail [] ())
 
 monadBuiltin =  [ (bindMName, bindWiredIn)
                 , (thenMName, thenWiredIn)
@@ -46,16 +46,16 @@ builtin :: SpecTableIn
 builtin = SpecTable [
     "Control.Distributed.Process.Internal.Primitives.send"
     :<=:
-    ELam "t" (
+    ELam "T" (
         ELam "p" (
             ELam "m" (
-                EPrimOp Send [ EType (TyVar "t") Nothing
+                EPrimOp Send [ EType (TyVar "T") Nothing
                              , EVar "p" (Just pidType)
-                             , EVar "m" (Just (TyVar "t"))
+                             , EVar "m" (Just (TyVar "T"))
                              ]
                 (Just (procType unitType))
-                ) (Just $ TyFun (TyVar "t") (procType unitType))
-            ) (Just $ TyFun pidType (TyFun (TyVar "t") (procType unitType)))
+                ) (Just $ TyFun (TyVar "T") (procType unitType))
+            ) (Just $ TyFun pidType (TyFun (TyVar "T") (procType unitType)))
         ) Nothing
 
   , "Control.Distributed.Process.Internal.Primitives.getSelfPid"
@@ -64,8 +64,8 @@ builtin = SpecTable [
     
   , "Control.Distributed.Process.Internal.Primitives.expect"
     :<=:
-    ELam "t" (EPrimOp Recv [EType (procType (TyVar "t")) Nothing]
-              (Just  (procType (TyVar "t"))))
+    ELam "T" (EPrimOp Recv [EType (procType (TyVar "T")) Nothing]
+              (Just  (procType (TyVar "T"))))
              Nothing
 
   , "Control.Distributed.Process.SymmetricProcess.spawnSymmetric"
@@ -78,20 +78,20 @@ builtin = SpecTable [
 
   , "Control.Distributed.BriskStatic.Internal.castEffect"
     :<=:
-    ELam "a" (ELam "b"
+    ELam "A" (ELam "B"
       (ELam "x" (ELam "y" (EVar "y" Nothing) Nothing) Nothing)
       Nothing) Nothing
 
   , "GHC.Err.error"
     :<=:
-    ELam "a" (ELam "s" (EPrimOp Fail [] (Just (TyVar "a"))) Nothing) Nothing
+    ELam "A" (ELam "s" (EPrimOp Fail [] (Just (TyVar "A"))) Nothing) Nothing
 
   , "Control.Monad.foldM"
     :<=:
-    ELam "t" (
-      ELam "m" (
-          ELam "b" (
-              ELam "a" (
+    ELam "T" (
+      ELam "M" (
+          ELam "B" (
+              ELam "A" (
                   ELam "f" (
                       ELam "base" (
                           ELam "xs" (
@@ -109,7 +109,7 @@ builtin = SpecTable [
 
     , "Brisk.Annotations.top"
       :<=:
-      ELam "a" (EAny (EType (TyVar "a") Nothing) Nothing) Nothing
+      ELam "A" (EAny (EType (TyVar "A") Nothing) Nothing) Nothing
   ]
 {-
 builtin :: [(String, String, EffExpr Id ())]
