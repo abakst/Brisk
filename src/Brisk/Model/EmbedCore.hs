@@ -49,13 +49,11 @@ retrieveAllSpecs env mg
     retrieveIfExport env mg mod
       = whenExports env mg mod tabOccName $ retrieveSpecs env mod
 
-type WordList = [Word]
 retrieveSpecs :: HscEnv -> Module -> CoreM SpecTableIn
 retrieveSpecs env mod
   = do origNm <- liftIO . initTcForLookup env $
          lookupOrig mod tabOccName
-       specTableTy  <- tyFromName env ''WordList
-       words <- liftIO $ getValueSafely env origNm specTableTy
+       words <- liftIO $ getValueSafely env origNm stringTy
        case words of
          Nothing -> abort "retrieveSpecs" ":("
          Just words' -> return (wordsToSpecTable words')
@@ -70,14 +68,13 @@ tyFromName env nm
 embedSpecTable :: Module -> [Name] -> SpecTableOut -> CoreM CoreBind
 embedSpecTable mod names tab@(SpecTable entries)
   = do t      <- tabName mod
-       return $ NonRec (mkExportedLocalId VanillaId t ty) wordList
+       encoded <- mkStringExpr str
+       return $ NonRec (mkExportedLocalId VanillaId t ty) encoded
          where
-           wordExp  = mkWordExprWord unsafeGlobalDynFlags
            entries' = [ x :<=: fmap fst t | x :<=: t <- entries, x `elem` ids ]
            ids      = nameId <$> names
-           words    = wordExp <$> specTableToWords (SpecTable entries')
-           wordList = mkExprList (Type wordTy) words
-           ty       = mkTyConApp listTyCon [wordTy]
+           str      = specTableToWords (SpecTable entries')
+           ty       = stringTy
 
 mkExprList :: CoreExpr -> [CoreExpr] -> CoreExpr
 mkExprList ty es

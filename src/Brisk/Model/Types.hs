@@ -28,6 +28,9 @@ import DataCon
 import Data.Data
 import Data.Serialize hiding (Fail)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.UTF8 as B8
+import qualified Data.ByteString.UTF8 as B8
+import qualified Codec.Binary.UTF8.String as B8String
 import qualified Type as T
 import qualified TypeRep as Tr
 import Data.Word
@@ -76,6 +79,7 @@ type Subset b a = (b, T.Type, Pred b a)
 data EffExpr b a =
    -- EVal    { valPred :: Subset b a, annot :: a }                -- ^ {v | p}
    EVal    { valVal :: Maybe Const, annot :: a }
+ | EAny    { anyTy :: EffType b a, annot :: a }
  | EVar    { varId :: b, annot :: a }                          -- ^ x
  | ECon    { conId :: b, conArgs :: [EffExpr b a], annot :: a }
  | EField  { fieldExp :: EffExpr b a, fieldNo :: Int, annot :: a }
@@ -101,14 +105,6 @@ data EffExpr b a =
            , primArgs :: [EffExpr b a]
            , annot    :: a
            }
- -- | EProcess { procProc :: Process b a, procRet :: EffExpr b a, annot :: a }
- -- | EBind    { bindFst :: EffExpr b a, bindSnd :: EffExpr b a, annot :: a }
- -- | EReturn  { retExp :: EffExpr b a, annot :: a }
- -- | Send     { sendTy :: EffType b a, sendPid :: EffExpr b a, sendMsg :: EffExpr b a, annot ::  a } -- ^ send(type, p, msg)
- -- | Recv     { recvTy :: EffType b a, annot :: a }
- -- | Spawn    { spawnProc :: Process b a, annot :: a }
- -- | SymSpawn { symSpawnSet :: EffExpr b a, symSpawnProc :: Process b a, annot ::  a } -- ^ symspawn(xs, p)
- -- | Self     { annot :: a }
    deriving (Eq, Show, Generic, Functor)
 instance (Serialize b, Serialize a) => Serialize (EffExpr b a)
 
@@ -121,19 +117,6 @@ instance Serialize PrimOp
 type Process b a  = EffExpr b a
 type EffType b a  = EffExpr b a
 type PureExpr b a = EffExpr b a
-
--- -- | Convenient Syntax
--- var = EVar
--- lam = ELam
--- app = EApp
--- ret = EReturn
--- fix = ERec
--- bind = EBind
--- x $>>$ y    = bind x y ()
--- x $->$ y    = lam x y ()
--- x $@$ y     = app x y ()
--- infixr $->$
--- infixl $@$
 
 ----------------------------------------------- 
 -- | Type Conversion 
@@ -162,6 +145,18 @@ splitAppTys (TyApp t1 t2) = (t1, reverse (go [] t2))
 ----------------------------------------------- 
 -- | Operations on Expressions  
 ----------------------------------------------- 
+defaultEffExpr :: a -> Tr.Type -> EffExpr Id a 
+defaultEffExpr a = go
+  where go (Tr.FunTy t0 t)
+          | T.isDictTy t0
+          = go t 
+          | otherwise
+          = ELam "_" (go t) a
+        go (Tr.ForAllTy tv t)
+          = ELam (nameId (getName tv)) (go t) a
+        go t
+          = EAny (EType (ofType nameId t) a) a
+    
 substs :: Subst b (EffExpr b a)
        => [b]
        -> [EffExpr b a]
@@ -208,6 +203,7 @@ simplify (ELam b e l)    = ELam b (simplify e) l
 simplify t@EType{}       = t
 simplify x@EVar{}        = x
 simplify v@EVal{}        = v
+simplify a@EAny{}        = a
 
 simplifyCaseApp :: forall a b. (Show a, Show b, Subst b (EffExpr b a))
                 => Type b
@@ -242,7 +238,7 @@ apConEff (ECon d args l) a = ECon d (args ++ [a]) l
 dataConId :: DataCon -> Id
 dataConId d
   | d == unitDataCon = "Unit"
-  | otherwise        = nameId (getName d)
+  | otherwise        = nameId (getName (dataConWorkId d))
 
 vv :: Id
 vv = "#vv"
@@ -262,10 +258,12 @@ instance Pretty b => Pretty (Type b) where
   ppPrec _ (TyConApp b ts) = pp b <> brackets (spaces ts)
   ppPrec _ (TyApp t1 t2) = pp t1 <+> pp t2
   ppPrec _ (TyFun t1 t2) = pp t1 <+> text "->" <+> pp t2
+  ppPrec _ (TyForAll x t) = text "forall" <+> pp x <> text "." <+> pp t
 
 instance (Pretty b, Eq b) => Pretty (EffExpr b a) where
   -- ppPrec _ (EVal (v,t,Rel Eq (PEffect (EVar v' _)) e) _)
   --   | v == v' = pp e
+  ppPrec _ (EAny t _)  = braces (pp t)
   ppPrec _ (EVal mv _) = maybe (text "⊥") pp mv
   -- ppPrec _ (EVal (v,t,p) _)
   --   = braces (pp p)
@@ -382,6 +380,7 @@ substExpr :: (Avoid b, Annot a, ToTyVar b,  Ord b)
           => Bool -> b -> EffExpr b a -> EffExpr b a -> EffExpr b a
 substExpr b x a = go
     where
+      go (EAny t l) = EAny (go t) l
       go v@(EVal{}) = v
       -- go v@(EVal (b,t,p) l) = (EVal (b, t, (substPred x a p)) l)
       go v@(EVar x' _)
@@ -420,6 +419,7 @@ substExpr b x a = go
             _           -> ty
 
 fvExpr :: (Avoid b, Annot a, ToTyVar b, Ord b) => EffExpr b a -> Set.Set b
+fvExpr (EAny t _)      = fv t
 fvExpr (EVal _ _)      = Set.empty
 fvExpr (EVar x _)      = Set.singleton x
 fvExpr (ECon x as _)   = Set.unions (fv <$> as)
@@ -477,17 +477,13 @@ type SpecTableIn  = SpecTable AnnIn
 instance Serialize a => Serialize (SpecEntry a)
 instance Serialize a => Serialize (SpecTable a)
 
-specTableToWords :: SpecTableIn -> [Word]
-specTableToWords = fmap conv . B.unpack . encode
-  where
-    conv (W8# w#) = W# w#
+specTableToWords :: SpecTableIn -> String
+specTableToWords = B8String.decode . B.unpack . encode
 
-wordsToSpecTable :: [Word] -> SpecTableIn    
+wordsToSpecTable :: String -> SpecTableIn    
 wordsToSpecTable wds
-  = case decode . B.pack . fmap conv $ wds of 
+  = case decode . B.pack . B8String.encode $ wds of 
       Left str -> abort "wordsToSpecTable" str
       Right t  -> t
-  where
-    conv (W# w#) = W8# w#
 
 data BriskAnnot = AnnotModule

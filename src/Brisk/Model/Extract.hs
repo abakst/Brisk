@@ -6,6 +6,7 @@ module Brisk.Model.Extract where
 import GHC (GhcMonad)
 import GhcPlugins          hiding ((<+>), pp, text, Subst, Id, mkTyVar)
 import Type                as Ty
+import TypeRep             as Tr
 import Name
 import Control.Monad.Trans.State
 import Control.Monad.State  hiding (get, gets, modify)
@@ -112,6 +113,17 @@ runMGen bs hsenv mg specs prog
     go                     = foldM mGenBind
     findModuleNameId b     = nameId <$> lookupName hsenv (mg_module mg) b
 
+isPure :: Ty.Type -> MGen Bool
+isPure t
+  = do ty <- gets procTy
+       return $ go ty t
+  where
+    go t (Tr.AppTy t1 t2)    = True
+    go t (Tr.TyConApp tc ts) = cmp t tc
+    go t (Tr.FunTy _ t')     = go t t'
+    go t (Tr.ForAllTy _ t')  = go t t'
+    cmp t t' = nameId (getName t) /= nameId (getName t')
+
 dumpBinds :: [(Id, AbsEff)] -> IO ()
 dumpBinds binds
   = forM_ binds $ \(k,v) ->
@@ -168,14 +180,19 @@ mGenExpr' g (Lit l)
        return (litEffect s l)
 
 mGenExpr' g (Var x)
-  | Just dc <- isDataConWorkId_maybe x
+  | Just dc <- isDataConId_maybe x
   = return $ conEffExpr (annotOfBind x) (dataConOrigResTy dc) dc
 
 mGenExpr' g (Var x)
   | Just a <- Env.lookup g (bindId x)
   = return (annotType (Var x) a)
   | otherwise
-  = return $ var (bindId x) (annotOfBind x)
+  = do pure <- isPure (idType x)
+       s    <- currentSpan
+       if pure then
+          return $ defaultEffExpr (Nothing, s) (idType x)
+       else
+          return $ var (bindId x) (annotOfBind x)
 
 mGenExpr' g (Let b e)
   = do g' <- mGenBind g b

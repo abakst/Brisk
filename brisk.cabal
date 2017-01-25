@@ -52,6 +52,7 @@ library
                      , syb
                      , binary
                      , bytestring
+                     , utf8-string
                      , ghc
                      , ghc-prim
                      , containers
