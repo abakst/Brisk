@@ -21,11 +21,13 @@ type IceTType   = E.Type E.Id
 
 data IceTStmt a = Send IceTType (IceTExpr a) (IceTExpr a)
                 | Recv IceTType (Maybe E.Id)
-                | Assgn E.Id IceTType (IceTExpr a)
+                | Assgn E.Id (Maybe IceTType) (IceTExpr a)
                 | Seq [IceTStmt a]
                 | Case (IceTExpr a) [(IceTExpr a, IceTStmt a)] (Maybe (IceTStmt a))
                 | ForEach E.Id (IceTExpr a) (IceTStmt a)
+                | NonDet IceTType
                 | While (IceTStmt a)
+                | Fail
                 | Skip
                 | Continue
                   deriving (Show, Eq)
@@ -111,7 +113,7 @@ anormalizeProc :: (Show a, HasType a)
                => IceTProcess a
                -> IceTProcess a
 ---------------------------------------------------
-anormalizeProc (Single p s) = Single p (anormalize s)
+anormalizeProc (Single p s)     = Single p (anormalize s)
 anormalizeProc (ParIter p ps s) = ParIter p ps (anormalize s)
 
 ---------------------------------------------------
@@ -182,7 +184,7 @@ fromEffExp s (E.ECase t e alts mdefault l) x
   = do a     <- fromPure s e
        alts' <- mapM (fromAlt l s t) alts
        d'    <- fromDefault mdefault
-       return $ (Case a alts' d', Nothing)
+       return $ (Case a alts' d', (flip E.EVar l <$> x))
          where
            fromDefault Nothing  = return Nothing
            fromDefault (Just d) = do
@@ -198,10 +200,14 @@ fromEffExp s (E.EVar x l) _
 fromEffExp s e@(E.EVal x _) _    
   = return (Skip, Just e)
 
+fromEffExp s e@(E.EPrimOp E.Fail _ _) _
+  = return (Fail, Nothing)
+
 fromEffExp s e _
   = error ("fromEffExpr:\n" ++ E.exprString e)
 
-fromPure :: Store a
+fromPure :: (Show a)
+         => Store a
          -> IceTExpr a
          -> ITM a (IceTExpr a)
 fromPure s (E.ECase t e alts d l)
@@ -224,6 +230,10 @@ fromPure s v@(E.EVar b l)
        return $ if b `elem` ps
                   then v
                   else lookupStore s b
+fromPure s a@E.EAny{}
+  = return a
+fromPure s e
+  = abort "fromPure" e
 
 ---------------------------------------------------
 fromApp :: (Show a, HasType a)
@@ -235,7 +245,7 @@ fromApp :: (Show a, HasType a)
 ---------------------------------------------------
 -- WARNING I am assuming this is tail recursive, but
 -- that is not currently checked!!!
-fromApp l s (E.ERec f e l') as
+fromApp l s erec@(E.ERec f e l') as
   | length xs == length as
   = do modify $ \s -> s { recFns = (f,xs) : recFns s }
        (stmt, ebody) <- fromEffExp s' body Nothing
@@ -244,6 +254,8 @@ fromApp l s (E.ERec f e l') as
            initArgs    = mkAssigns (zip xs as)
            app         = seqStmts [initArgs, while]
        return (app, Nothing)
+  | otherwise
+  = abort "fromApp" (erec, as)
   where
     (xs,body) = E.collectArgs e -- e should be a function in general
     s'        = addsStore l s xs
@@ -262,7 +274,7 @@ fromApp l s e as
   = abort "fromApp" e
 
 mkAssigns xas
-  = Seq [ Assgn x (fromJust $ getType a) a | (x,a) <- xas, nonTrivialAssign x a ]
+  = Seq [ Assgn x (getType a) a | (x,a) <- xas, nonTrivialAssign x a ]
   where
     nonTrivialAssign x (E.EVar y _) = x /= y
     nonTrivialAssign _ _            = True
@@ -272,7 +284,7 @@ mkWhileLoop l f stmt e
   where
     mret = maybe [] (return . mkAssgn) e
     retx = "ret_" ++ f
-    mkAssgn e = Assgn retx (fromJust $ getType e) e
+    mkAssgn e = Assgn retx (getType e) e
 
 ---------------------------------------------------
 fromAlt :: (Show a, HasType a)
@@ -349,7 +361,7 @@ fromBind :: (Show a, HasType a)
 ---------------------------------------------------
 fromBind s l1 l2 e1 x e2 y
   = do (p1, mv1) <- fromEffExp s e1 (Just x)
-       let s' = maybe s (extendStore s x) mv1
+       let s' = maybe (extendStore s x (E.EVar x l1)) (extendStore s x) mv1
        (p2, v2) <- fromEffExp s' e2 y
        return (flattenSeq $ Seq [p1, p2], v2)
 
@@ -375,6 +387,8 @@ anf :: (Show a, HasType a) => IceTStmt a -> ANFM (IceTStmt a)
 ---------------------------------------------------
 anf Skip
   = return Skip
+anf Fail
+  = return Fail
 anf Continue
   = return Continue
 anf s@Recv {}
@@ -402,9 +416,13 @@ anf (ForEach x xs s)
   = do (xs', bs) <- imm xs
        s'        <- anf s
        return (stitch bs (ForEach x xs' s'))
+anf s
+  = abort "anf" s
 
 imm :: (Show a, HasType a)
     => IceTExpr a -> ANFM (IceTExpr a, [(E.Id, IceTExpr a)])
+imm e@E.EAny{}
+  = return (e, [])
 imm e@E.EVar{}
   = return (e, [])
 imm e@(E.EVal _ _)
@@ -420,6 +438,10 @@ imm e@E.ECase {}
 imm e@E.EField {}
   = do x <- fresh (E.annot e)
        return (x, [(E.varId x, e)])
+-- imm e@(E.ELam b bdy a)
+--   = return (e, [])
+imm e
+  = abort "imm" e
 
 fresh :: a -> ANFM (IceTExpr a)
 fresh l = do i <- get
@@ -430,4 +452,4 @@ stitch :: HasType a => [(E.Id, IceTExpr a)] -> IceTStmt a -> IceTStmt a
 stitch bs s = seqStmts (assigns ++ [s])
   where
     assigns   = go <$> bs
-    go (x, e) = Assgn x (fromJust $ getType e) e
+    go (x, e) = Assgn x (getType e) e

@@ -91,15 +91,21 @@ fromIceTStmt pid (ForEach x xs s)
                            , fromIceTStmt pid s
                            ]
 
+fromIceTStmt pid Fail
+  = mkFail (prolog pid)
+
 fromIceTPid (T.EVar v l)
   = prologPid v
 
 fromIceTPidSet (T.EVar v _)
   = mkPidSet v
 
+
 ---------------------------------------------------
 fromIceTExpr :: (Show a, HasType a) => ProcessId -> IceTExpr a -> Doc
 ---------------------------------------------------
+fromIceTExpr _ (T.EAny t l)
+  = prolog "_"
 fromIceTExpr _ (T.EVar v l)
   = prolog v
 fromIceTExpr _ (T.EType t _)
@@ -123,6 +129,9 @@ fromIceTExpr pid e
 
 mkPidSet (s0:s)  
   = compoundTerm "set" [prolog (toLower s0 : s)]
+
+mkFail :: Doc -> Doc
+mkFail p = compoundTerm "die" [p]
 
 mkField :: Doc -> [Doc] -> Doc
 mkField = mkAction "field" 2
@@ -196,18 +205,28 @@ tupleTerms = parens . hcat . punctuate (comma<>space)
 
 compoundTerm :: String -> [Doc] -> Doc
 compoundTerm n ds
-  = text n <> tupleTerms ds
+  = prolog n <> tupleTerms ds
 
 class Prolog a where
   prolog    :: a -> Doc
   prologPid :: a -> Doc
 
 instance Prolog String where
-  prolog = text
+  prolog = text . last . textNoDots
 
   prologPid pid@(s:_)
     | isUpper s = compoundTerm "e_pid" [text pid]
     | otherwise = compoundTerm "e_var" [text pid]
+
+textNoDots s
+  = case dropWhile isDot s of
+      "" -> []
+      s' -> w : textNoDots s''
+        where
+          (w, s'') = break isDot s'
+  where
+    isDot c = c == '.'
+
 
 instance Prolog Int where
   prolog    = int

@@ -106,8 +106,8 @@ runMGen bs hsenv mg specs prog
        --   putStrLn (show x ++ " :=\n" ++ ppShow e)
        -- forM_ binds' $ \(x, e) ->
        --   putStrLn (show x ++ " :=\n" ++ runPromela e)
-       -- forM_ binds $ 
-       --   putStrLn . toBriskString . snd
+       forM_ binds $ 
+         putStrLn . toBriskString . snd
        return $ SpecTable [ x :<=: e | (x,e) <- binds ]
   where
     go :: EffMap -> CoreProgram -> MGen EffMap
@@ -192,7 +192,7 @@ mGenExpr' g (Var x)
   | otherwise
   = do pure <- isPure (idType x)
        s    <- currentSpan
-       if False {- pure -} then
+       if pure then
           return $ defaultEffExpr (Nothing, s) (idType x)
        else
           return $ var (bindId x) (annotOfBind x)
