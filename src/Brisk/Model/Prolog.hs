@@ -96,9 +96,15 @@ fromIceTStmt pid Fail
 
 fromIceTPid (T.EVar v l)
   = prologPid v
+fromIceTPid (T.ESymElt e l)
+  = fromIceTPidSet e
+fromIceTPid e
+  = abort "fromIceTPid" e
 
 fromIceTPidSet (T.EVar v _)
   = mkPidSet v
+fromIceTPidSet e
+  = abort "fromIceTPidSet" e
 
 
 ---------------------------------------------------
@@ -124,6 +130,8 @@ fromIceTExpr pid (T.ECase t e alts d l)
     ppid = prolog pid
 fromIceTExpr pid (T.EField e i _)
   = mkField (prolog pid) [fromIceTExpr pid e, prolog i]
+fromIceTExpr pid (T.ESymElt e _)
+  = compoundTerm "nonDet" [prolog pid, fromIceTExpr pid e]
 fromIceTExpr pid e
   = abort "fromIceTExpr" e
 

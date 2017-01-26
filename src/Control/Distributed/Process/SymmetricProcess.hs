@@ -2,6 +2,7 @@
 module Control.Distributed.Process.SymmetricProcess (
     SymSet
   , spawnSymmetric
+  , chooseSymmetric, (?!)
   ) where
 
 import Control.Monad
@@ -29,16 +30,25 @@ instance Traversable SymSet where
     where
       es' = traverse f es
 
+---------------------------------------------------------------------------
 fromList :: [a] -> SymSet a
+---------------------------------------------------------------------------
 fromList xs = SymSet { size  = length xs
                      , elems = xs
                      }
+
+
+---------------------------------------------------------------------------
+(?!), chooseSymmetric :: SymSet a -> Int -> a
+---------------------------------------------------------------------------
+chooseSymmetric SymSet { elems = xs } i = xs !! i
+(?!) = chooseSymmetric
 
 ---------------------------------------------------------------------------
 spawnSymmetric :: [NodeId] -> Closure (Process ()) -> Process SymProcessSet
 ---------------------------------------------------------------------------
 spawnSymmetric nodes p
-  = do ps <- foldM go [] nodes -- nodes $ \node -> undefined
+  = do ps <- foldM go [] nodes
        return SymSet { size = length nodes, elems = ps }
   where
     go a n = do pid <- spawn n p

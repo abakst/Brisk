@@ -82,6 +82,7 @@ data EffExpr b a =
    -- EVal    { valPred :: Subset b a, annot :: a }                -- ^ {v | p}
    EVal    { valVal :: Maybe Const, annot :: a }
  | EAny    { anyTy :: EffType b a, annot :: a }
+ | ESymElt { symSet :: EffExpr b a, annot :: a }
  | EVar    { varId :: b, annot :: a }                          -- ^ x
  | ECon    { conId :: b, conArgs :: [EffExpr b a], annot :: a }
  | EField  { fieldExp :: EffExpr b a, fieldNo :: Int, annot :: a }
@@ -213,6 +214,7 @@ simplify t@EType{}       = t
 simplify x@EVar{}        = x
 simplify v@EVal{}        = v
 simplify a@EAny{}        = a
+simplify (ESymElt set l) = ESymElt (simplify set) l
 
 simplifyCasesMaybe :: (Show a, Show b, Subst b (EffExpr b a))
                    => EffExpr b a
@@ -286,6 +288,7 @@ instance (Pretty b, Eq b) => Pretty (EffExpr b a) where
   --   | v == v' = pp e
   ppPrec _ (EAny t _)  = braces (pp t)
   ppPrec _ (EVal mv _) = maybe (text "⊥") pp mv
+  ppPrec _ (ESymElt set _) = braces (text "_ ∈" <+> pp set)
   -- ppPrec _ (EVal (v,t,p) _)
   --   = braces (pp p)
   ppPrec _ (EField e i _)
@@ -402,6 +405,7 @@ substExpr :: (Avoid b, Annot a, ToTyVar b,  Ord b)
 substExpr b x a = go
     where
       go (EAny t l) = EAny (go t) l
+      go (ESymElt set l) = ESymElt (go set) l
       go v@(EVal{}) = v
       -- go v@(EVal (b,t,p) l) = (EVal (b, t, (substPred x a p)) l)
       go v@(EVar x' _)
@@ -441,6 +445,7 @@ substExpr b x a = go
 
 fvExpr :: (Avoid b, Annot a, ToTyVar b, Ord b) => EffExpr b a -> Set.Set b
 fvExpr (EAny t _)      = fv t
+fvExpr (ESymElt s _)   = fv s
 fvExpr (EVal _ _)      = Set.empty
 fvExpr (EVar x _)      = Set.singleton x
 fvExpr (ECon x as _)   = Set.unions (fv <$> as)

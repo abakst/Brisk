@@ -72,9 +72,13 @@ builtin = SpecTable [
     :<=:
     ELam "nodes" (
       ELam "p" (
-          (EPrimOp SymSpawn [EVar "p" Nothing] (Just (procType (TyConApp "Control.Distributed.Process.SymmetricProcess.SymProcessSet" [] ))))
+          (EPrimOp SymSpawn [EVar "nodes" Nothing, EVar "p" Nothing] (Just (procType (TyConApp "Control.Distributed.Process.SymmetricProcess.SymProcessSet" [] ))))
           ) Nothing
        ) Nothing
+
+  , "Control.Distributed.Process.SymmetricProcess.chooseSymmetric"
+    :<=:
+    ELam "A" (ELam "set" (ELam "_" (ESymElt (EVar "set" Nothing) (Just (TyVar "A"))) Nothing) Nothing) Nothing
 
   , "Control.Distributed.BriskStatic.Internal.castEffect"
     :<=:

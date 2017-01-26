@@ -97,18 +97,15 @@ runMGen bs hsenv mg specs prog
        procTy    <- ghcTyName hsenv "Control.Distributed.Process.Internal.Types" "Process"
        g         <- evalStateT (go g0 prog) (initialEState hsenv mg procTy)
        ns        <- forM bs findModuleNameId
-       let binds = if null ns
-                     then Env.toList g
-                     else filter ((`elem` ns) . fst) (Env.toList g)
-           binds' = (runIceT <$>) <$> binds
-       dumpBinds binds
+       let all   = Env.toList g
+           brisk = filter ((`elem` ns) . fst) all
+       dumpBinds all
+       forM_ brisk (putStrLn . toBriskString . snd)
        -- forM_ binds' $ \(x, e) ->
        --   putStrLn (show x ++ " :=\n" ++ ppShow e)
        -- forM_ binds' $ \(x, e) ->
        --   putStrLn (show x ++ " :=\n" ++ runPromela e)
-       forM_ binds $ 
-         putStrLn . toBriskString . snd
-       return $ SpecTable [ x :<=: e | (x,e) <- binds ]
+       return $ SpecTable [ x :<=: e | (x,e) <- all ]
   where
     go :: EffMap -> CoreProgram -> MGen EffMap
     go                     = foldM mGenBind

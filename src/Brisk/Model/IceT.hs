@@ -157,6 +157,24 @@ fromEffExp s (E.EPrimOp E.Return [e] _) y
   = do e' <- fromPure s e
        return (Skip, Just e')
 
+fromEffExp s (E.EPrimOp E.FoldM [E.ELam x (E.ELam a body _) _, base, xs] l) y       
+  = fromEffExp s  E.EPrRec { E.precAcc = a
+                           , E.precNext = x
+                           , E.precBody = body
+                           , E.precBase = base
+                           , E.precArg = xs
+                           , E.annot = l
+                           } y
+
+fromEffExp s (E.EPrRec acc x body acc0 xs l) mx
+  = do (stmt, _) <- fromEffExp s' body mx
+       exs       <- fromPure s xs
+       return (foreach stmt exs, Nothing)
+  where
+    s' = addsStore l s [acc, x]
+    foreach s exs = ForEach x exs s
+
+
 fromEffExp s (E.EPrimOp E.Self [] l) _
   = do me <- gets current
        return (Skip, Just (E.EVar [me] (setType t' l)))
@@ -172,14 +190,6 @@ fromEffExp s app@(E.EApp _ _ l) _
 fromEffExp s r@(E.ERec f e l) _
   = fromApp l s r []
 
-fromEffExp s (E.EPrRec acc x body acc0 xs l) mx
-  = do (stmt, _) <- fromEffExp s' body mx
-       exs       <- fromPure s xs
-       return (foreach stmt exs, Nothing)
-  where
-    s' = addsStore l s [acc, x]
-    foreach s exs = ForEach x exs s
-
 fromEffExp s (E.ECase t e alts mdefault l) x
   = do a     <- fromPure s e
        alts' <- mapM (fromAlt l s t) alts
@@ -191,17 +201,23 @@ fromEffExp s (E.ECase t e alts mdefault l) x
              (st,_) <- fromEffExp s d Nothing
              return (Just st)
 
-fromEffExp s (E.EVar x l) _
+fromEffExp s v@(E.EVar x l) _
   = recCall x >>= go
   where
     go (Just []) = return (Continue, Nothing)
-    go _         = error ("fromEffExpr: bare var (" ++ x ++ ")")
+    go _         = return (Skip, Just v)
 
 fromEffExp s e@(E.EVal x _) _    
   = return (Skip, Just e)
 
+fromEffExp s a@(E.EAny x _) _  
+  = return (Skip, Just a)
+
 fromEffExp s e@(E.EPrimOp E.Fail _ _) _
   = return (Fail, Nothing)
+
+fromEffExp s e@E.ECon {} _
+  = return (Skip, Just e)
 
 fromEffExp s e _
   = error ("fromEffExpr:\n" ++ E.exprString e)
@@ -232,6 +248,8 @@ fromPure s v@(E.EVar b l)
                   else lookupStore s b
 fromPure s a@E.EAny{}
   = return a
+fromPure s (E.ESymElt set l)
+  = E.ESymElt <$> fromPure s set <*> pure l
 fromPure s e
   = abort "fromPure" e
 
@@ -423,6 +441,11 @@ imm :: (Show a, HasType a)
     => IceTExpr a -> ANFM (IceTExpr a, [(E.Id, IceTExpr a)])
 imm e@E.EAny{}
   = return (e, [])
+imm (E.ESymElt s l)
+  = do (s', bs) <- imm s
+       x        <- fresh l
+       let e = E.ESymElt s' l
+       return (x, bs ++ [(E.varId x, e)])
 imm e@E.EVar{}
   = return (e, [])
 imm e@(E.EVal _ _)
