@@ -64,10 +64,18 @@ builtin = SpecTable [
     
   , "Control.Distributed.Process.Internal.Primitives.expect"
     :<=:
-    ELam "T" (EPrimOp Recv [EType (procType (TyVar "T")) Nothing]
+    ELam "T" (EPrimOp Recv [EType (TyVar "T") Nothing]
               (Just  (procType (TyVar "T"))))
              Nothing
 
+  , "Control.Distributed.Process.Internal.Spawn.spawn"
+    :<=:
+    ELam "node" (
+      ELam "p" (
+         (EPrimOp Spawn [EVar "p" Nothing] (Just (procType pidType)))
+         ) Nothing
+      ) Nothing
+   
   , "Control.Distributed.Process.SymmetricProcess.spawnSymmetric"
     :<=:
     ELam "nodes" (
@@ -89,6 +97,43 @@ builtin = SpecTable [
   , "GHC.Err.error"
     :<=:
     ELam "A" (ELam "s" (EPrimOp Fail [] (Just (TyVar "A"))) Nothing) Nothing
+
+  , "Control.Distributed.Process.SymmetricProcess.expectFrom"
+    :<=:
+    ELam "A" (
+      ELam "p" (
+          EPrimOp Bind
+             [ EPrimOp Recv [ EType (TyConApp "Control.Distributed.Process.SymmetricProcess.SelfSigned" [TyVar "A"]) Nothing
+                            , EVar "p" (Just pidType)
+                            ] (Just (procType (TyVar "A")))
+             , ELam "msg" (ECase
+                           (TyVar "A")
+                           (EVar "msg" Nothing)
+                           [ ( "Control.DistributedProcess.SymmetricProcess.SelfSigned"
+                             , ["_", "pay"]
+                             , EPrimOp Return [EVar "pay" (Just (TyVar "A"))] Nothing
+                             )
+                           ]
+                           Nothing
+                           Nothing) Nothing
+             ] Nothing
+          ) Nothing
+      ) Nothing
+
+  , "Control.Distributed.Process.SymmetricProcess.selfSign"
+    :<=:
+    let ret = ECon ty
+                   [ EVar "me" Nothing, EVar "m" (Just (TyVar "A")) ]
+                   (Just (TyConApp ty [TyVar "A"]))
+        ty = "Control.DistributedProcess.SymmetricProcess.SelfSigned"
+    in
+    ELam "A" (
+      ELam "m" (
+          EPrimOp Bind [ EPrimOp Self [] Nothing
+                       , ELam "me" (EPrimOp Return [ret] Nothing) Nothing
+                       ] Nothing
+          ) Nothing
+      ) Nothing
 
   , "Control.Monad.foldM"
     :<=:

@@ -34,6 +34,7 @@ import qualified Data.ByteString.UTF8 as B8
 import qualified Data.ByteString.UTF8 as B8
 import qualified Codec.Binary.UTF8.String as B8String
 import qualified Type as T
+import TyCon
 import qualified TypeRep as Tr
 import Data.Word
 import GHC.Word
@@ -124,19 +125,19 @@ type PureExpr b a = EffExpr b a
 ----------------------------------------------- 
 -- | Type Conversion 
 ----------------------------------------------- 
-ofType :: (Name -> b) -> T.Type -> Type b
-ofType f = go 
+ofType :: (TyCon.TyCon -> b) -> (Name -> b) -> T.Type -> Type b
+ofType f g = go 
   where
     go (Tr.TyVarTy v)
-      = TyVar . f $ getName v
+      = TyVar . g $ getName v
     go (Tr.AppTy t1 t2)
       = TyApp (go t1) (go t2)
     go (Tr.TyConApp tc ts)
-      = TyConApp (f . getName $ tc) (go <$> ts)
+      = TyConApp (f tc) (go <$> ts)
     go (Tr.FunTy t1 t2)
       = TyFun (go t1) (go t2)
     go (Tr.ForAllTy v t)
-      = TyForAll (f . getName $ v) (go t)
+      = TyForAll (g . getName $ v) (go t)
 
 tyVarName :: String -> String    
 tyVarName (s0:s)
@@ -149,6 +150,7 @@ splitAppTys (TyApp t1 t2) = (t1, reverse (go [] t2))
       = go (t1:ts) t2
     go ts t
       = t:ts
+splitAppTys t = abort "splitAppTys" t
 ----------------------------------------------- 
 -- | Operations on Expressions  
 ----------------------------------------------- 
@@ -162,7 +164,7 @@ defaultEffExpr a = go
         go (Tr.ForAllTy tv t)
           = ELam (nameId (getName tv)) (go t) a
         go t
-          = EAny (EType (ofType nameId t) a) a
+          = EAny (EType (ofType tyConId nameId t) a) a
     
 substs :: Subst b (EffExpr b a)
        => [b]
@@ -261,6 +263,9 @@ apConEff (ECon d args l) a = ECon d (args ++ [a]) l
 dataConId :: DataCon -> Id
 dataConId d
   | d == unitDataCon = "Unit"
+  | d == consDataCon = "Cons"
+  | d == nilDataCon  = "Nil"
+  | isTupleDataCon d = "Tuple"
   | otherwise        = nameId (getName (dataConWorkId d))
 
 vv :: Id
@@ -276,8 +281,12 @@ class Ord b => Subst b a where
 class ToTyVar b where
   toTyVar :: b -> T.TyVar
 
+instance ToTyVar Id where
+  toTyVar = mkTyVar
+
 instance Pretty b => Pretty (Type b) where
   ppPrec _ (TyVar b) = pp b
+  ppPrec _ (TyConApp b []) = pp b
   ppPrec _ (TyConApp b ts) = pp b <> brackets (spaces ts)
   ppPrec _ (TyApp t1 t2) = pp t1 <+> pp t2
   ppPrec _ (TyFun t1 t2) = pp t1 <+> text "->" <+> pp t2
@@ -513,3 +522,4 @@ wordsToSpecTable wds
       Right t  -> t
 
 data BriskAnnot = AnnotModule
+

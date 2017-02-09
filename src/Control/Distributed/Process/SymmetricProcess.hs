@@ -1,14 +1,43 @@
+{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE TemplateHaskell #-}
 module Control.Distributed.Process.SymmetricProcess (
     SymSet
+  , selfSign, payload
+  , expectFrom
   , spawnSymmetric
   , chooseSymmetric, (?!)
   ) where
 
 import Control.Monad
+import Data.Binary
+import Data.Typeable
+import GHC.Generics (Generic)
 import Control.Distributed.Process
+import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Closure
 
+---------------------------------------------------------------------------
+-- Self Signed Messages
+---------------------------------------------------------------------------
+data SelfSigned a = SelfSigned { sender  :: ProcessId
+                               , payload :: a
+                               }
+                    deriving (Typeable, Generic)
+instance Binary a => Binary (SelfSigned a)
+
+selfSign :: a -> Process (SelfSigned a)
+selfSign m = do me <- getSelfPid
+                return $ SelfSigned { sender = me, payload = m }
+
+expectFrom :: Serializable a => ProcessId -> Process a
+expectFrom p = receiveWait recv
+  where
+    pred = (==p) . sender
+    recv = [ matchIf pred (return . payload) ]
+
+---------------------------------------------------------------------------
+-- Symmetric Sets
+---------------------------------------------------------------------------
 data SymSet a = SymSet {
     size  :: Int
   , elems :: [a]

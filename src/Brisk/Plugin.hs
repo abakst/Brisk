@@ -64,6 +64,7 @@ runBrisk bs mg binds
 
              do (SpecTable entries') <- retrieveSpecs hsenv mod
                 return (SpecTable (entries ++ entries'))
+       putMsgS (showSDoc dynflags (ppr specMods))
        specs0       <- retrieveAllSpecs hsenv mg
        let specTab0 = SpecTable (concat [ es | SpecTable es <- specs0 ])
        specs <- foldM go specTab0 specMods
@@ -71,8 +72,18 @@ runBrisk bs mg binds
          runMGen bs hsenv mg specs (deShadowBinds binds)
        case spec_tab of
          Just tab -> do
-           (tab', ns) <- foo mg tab annEnv
-           let names = exportedNames mg ++ ns
+           --  This one implements "Assume" specs
+           (tab', ns) <- fixupSpecNames mg tab annEnv
+           --  Next, look in the exported names to see if
+           --  we are exporting any spec modules, and if so
+           --  merge the spec table in with ours
+
+           --  We'll do this stupidly by *reloading* the table,
+           --  but we should probably store the table when it
+           --  it was first loaded...
+           let names  = exportedNames mg ++ ns
+               -- specModsOut = [ m | m <- specMods, getName m `elem` names ]
+           -- error "need to re-export exported spec modules"
            tabbind@(NonRec tabid _) <- embedSpecTable (mg_module mg) names tab'
            return $ mg { mg_binds   = binds ++ [tabbind]
                        , mg_exports = mg_exports mg ++ [Avail $ getName tabid]
@@ -86,13 +97,14 @@ runBrisk bs mg binds
 
 specModules :: ModGuts -> AnnEnv -> [Module]
 specModules mg annEnv
-  = [ mod | mod <- imports, isSpecMod mod ]
+  = [ mod | mod <- imports, isSpecMod annEnv mod ]
   where
     imports   = fst <$> (moduleEnvToList $ mg_dir_imps mg)
-    isSpecMod = not . null . lookupAnns annEnv ModuleTarget
 
-foo :: ModGuts -> SpecTableOut -> AnnEnv -> CoreM (SpecTableOut, [Name])
-foo mg (SpecTable specs) annEnv
+isSpecMod annEnv = not . null . lookupAnns annEnv ModuleTarget
+
+fixupSpecNames :: ModGuts -> SpecTableOut -> AnnEnv -> CoreM (SpecTableOut, [Name])
+fixupSpecNames mg (SpecTable specs) annEnv
   = do let exported = [(nameId n, n') | Avail n   <- mg_exports mg
                                       , Assume n' <- lookupAnns annEnv NamedTarget n
                                       ]

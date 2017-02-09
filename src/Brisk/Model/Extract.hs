@@ -55,9 +55,6 @@ instance HasType TyAnnot where
   getType         = fst
   setType t (_,l) = (t,l)
 
-instance ToTyVar Id where
-  toTyVar = mkTyVar
-
 pushSpan :: RealSrcSpan -> MGen ()              
 pushSpan ss = modify $ \s -> s { srcSpans = RealSrcSpan ss : srcSpans s }
 
@@ -73,7 +70,7 @@ noAnnot :: Functor f => f a -> f TyAnnot
 noAnnot = fmap (const dummyAnnot)
 
 specAnnot :: Maybe Ty.Type -> TyAnnot  
-specAnnot t = (ofType (tyVarName . nameId) <$> t, noSrcSpan)
+specAnnot t = (idOfType <$> t, noSrcSpan)
 
 annotType :: CoreExpr -> AbsEff -> AbsEff
 annotType e t = t { annot = a }
@@ -81,7 +78,8 @@ annotType e t = t { annot = a }
     a | isTypeArg e = annot t
       | otherwise   = (Just (exprEType e),  snd (annot t))
 
-exprEType = ofType (tyVarName . nameId) . exprType    
+idOfType  = ofType tyConId (tyVarName . nameId)
+exprEType = idOfType . exprType    
 
 liftAnnot t = (t, noSrcSpan)  
 
@@ -99,12 +97,10 @@ runMGen bs hsenv mg specs prog
        ns        <- forM bs findModuleNameId
        let all   = Env.toList g
            brisk = filter ((`elem` ns) . fst) all
-       dumpBinds all
+       -- dumpBinds all
+       dumpBinds brisk
+       forM_ brisk (putStrLn . render . PP.vcat . fmap pp . runIceT . snd)
        forM_ brisk (putStrLn . toBriskString . snd)
-       -- forM_ binds' $ \(x, e) ->
-       --   putStrLn (show x ++ " :=\n" ++ ppShow e)
-       -- forM_ binds' $ \(x, e) ->
-       --   putStrLn (show x ++ " :=\n" ++ runPromela e)
        return $ SpecTable [ x :<=: e | (x,e) <- all ]
   where
     go :: EffMap -> CoreProgram -> MGen EffMap
@@ -135,7 +131,7 @@ bindId :: NamedThing a => a -> Id
 bindId = nameId . getName
 
 annotOfBind x
-  = (Just . ofType (tyVarName . nameId) $ idType x, getSrcSpan x)
+  = (Just . idOfType $ idType x, getSrcSpan x)
 
 mGenBind :: EffMap -> CoreBind -> MGen EffMap 
 mGenBind g (NonRec x b)
@@ -171,7 +167,7 @@ mGenExpr' g (Tick _ e)
   = mGenExpr g e
 mGenExpr' g (Type t)
   = do s <- currentSpan
-       return (EType (ofType (tyVarName . nameId) t) (Nothing, s))
+       return (EType (idOfType t) (Nothing, s))
 mGenExpr' g exp@(Cast e _)
   = mGenExpr g e
 
@@ -189,7 +185,7 @@ mGenExpr' g (Var x)
   | otherwise
   = do pure <- isPure (idType x)
        s    <- currentSpan
-       if pure then
+       if False then
           return $ defaultEffExpr (Nothing, s) (idType x)
        else
           return $ var (bindId x) (annotOfBind x)
@@ -197,7 +193,6 @@ mGenExpr' g (Var x)
 mGenExpr' g (Let b e)
   = do g' <- mGenBind g b
        mGenExpr g' e
-
 mGenExpr' g abs@(Lam b e)
   = do a <- mGenExpr (Env.insert g n (var n $ annotOfBind b)) e
        s <- currentSpan
@@ -206,7 +201,8 @@ mGenExpr' g abs@(Lam b e)
        else
          return (lam n a (Just (exprEType abs), s))
          where
-           n = bindId b
+           n | isTyVar b = tyVarName (bindId b)
+             | otherwise = bindId b
 
 mGenExpr' g exp@(App e e')
   | not (isTypeArg e') && isDictTy (exprType e')
@@ -220,9 +216,7 @@ mGenExpr' g e@(App e1@(Var f) e2@(Type t))
   = do a <- mGenMonadOp f tc
        annotType e <$> maybe defApp return a
          where
-           sub    = GhcPlugins.extendTvSubst emptySubst f t
            defApp = do eff1 <- mGenExpr g e1
-                       eff2 <- mGenExpr g (GhcPlugins.substExpr (Ghc.text "App") sub e2)
                        eff2 <- mGenExpr g e2
                        mGenApp g eff1 eff2
 mGenExpr' g e@(App e1 e2)
@@ -289,7 +283,7 @@ mGenCaseAlts g = mapM go
                                   | b <- bs
                                   ]
            a <- mGenExpr g' e
-           return (bindId c, bindId <$> bs, a)
+           return (dataConId c, bindId <$> bs, a)
     go (LitAlt l, [], e)
       = do ae <- mGenExpr g e
            return (vv, [], ae)

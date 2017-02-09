@@ -41,7 +41,6 @@ ghcVarName env mod var
   where
     ns | isUpper (var !! 0) = OccName.dataName
        | otherwise          = OccName.varName
-           
 
 ghcRawVarName :: HscEnv -> String -> IO Name
 ghcRawVarName env nm
@@ -145,6 +144,12 @@ nameId n = briskShowPpr $ concatFS [modFS, occFS, uniqFS]
        = concatFS [fsLit "_",  fsLit (briskShowPpr (getUnique n))]
        | otherwise
        = fsLit ""
+
+tyConId :: TyCon -> String    
+tyConId tc
+  | tc == listTyCon = "List"
+  | isTupleTyCon tc = "Tuple"
+  | otherwise       = nameId (getName tc)
 
 instance Show Type where
   show = showSDoc unsafeGlobalDynFlags . ppr

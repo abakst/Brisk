@@ -8,6 +8,8 @@ import           OccName
 import           Text.PrettyPrint.HughesPJ
 import           Control.Exception
 import           Data.Char
+import           Data.List
+import           Data.Maybe
 import qualified Brisk.Model.Types as T
 import           Brisk.Model.Types (Id)
 import           Brisk.Model.IceT
@@ -17,12 +19,12 @@ import           Brisk.UX
 import qualified GhcPlugins as GT
 
 ---------------------------------------------------
-toBriskString :: (Show a, HasType a) => T.EffExpr T.Id a -> String
+toBriskString :: (Show a, HasType a, T.Annot a) => T.EffExpr T.Id a -> String
 ---------------------------------------------------
 toBriskString = render . toBrisk                 
 
 ---------------------------------------------------
-toBrisk :: (Show a, HasType a) => T.EffExpr T.Id a -> Doc
+toBrisk :: (Show a, HasType a, T.Annot a) => T.EffExpr T.Id a -> Doc
 ---------------------------------------------------
 toBrisk e = fromIceT (runIceT e)
 
@@ -50,17 +52,16 @@ fromIceTStmt pid s@(Seq _)
 
 fromIceTStmt pid (Send t p m)
   = mkSend (prolog pid) [ prolog t
-                        , fromIceTPid  p
+                        , fromIceTPid pid p
                         , fromIceTExpr pid m
                         ]
 fromIceTStmt pid Skip
   = mkSkip
 
-fromIceTStmt pid (Recv ty my)
-  = mkRecv (prolog pid) [ mkType [prolog ty]
-                        , y
-                        ]
+fromIceTStmt pid (Recv ty w my)
+  = mkRecv (prolog pid) (wc ++ [ mkType [prolog ty], y])
   where
+    wc = maybe [] (return . fromIceTExpr pid) w
     y = case my of
           Nothing -> prolog "_"
           Just y  -> prolog y
@@ -69,14 +70,14 @@ fromIceTStmt pid (Assgn x _ e)
   = mkAssign (prolog pid) [prolog x, fromIceTExpr pid e]
 
 fromIceTStmt pid (Case e cases d)
-  = mkCases (prolog pid) (fromIceTExpr pid e) pCases 
+  = mkCases (prolog pid) (fromIceTExpr pid e) pCases defaultCase
   where
     pCases
-      = (goCase <$> cases) ++ defaultCase
+      = goCase <$> cases
     goCase (e, s)
       = mkCase ppid (fromIceTExpr pid e) (fromIceTStmt pid s)
     defaultCase
-      = maybe [] (return . mkDefaultCase ppid . fromIceTStmt pid) d
+      = (mkDefault ppid . fromIceTStmt pid) <$> d
     ppid = prolog pid
 
 fromIceTStmt pid (While s)    
@@ -87,43 +88,48 @@ fromIceTStmt pid Continue
 
 fromIceTStmt pid (ForEach x xs s)
   = mkForEach (prolog pid) [ prolog x
-                           , fromIceTPidSet xs
+                           , fromIceTPidSet pid xs
                            , fromIceTStmt pid s
                            ]
 
 fromIceTStmt pid Fail
   = mkFail (prolog pid)
 
-fromIceTPid (T.EVar v l)
+fromIceTPid pid (T.EVar v l)
   = prologPid v
-fromIceTPid (T.ESymElt e l)
-  = fromIceTPidSet e
-fromIceTPid e
-  = abort "fromIceTPid" e
+fromIceTPid pid (T.ESymElt e l)
+  = fromIceTPidSet pid e
+fromIceTPid pid e
+  = prologPid (fromIceTExpr pid e)
 
-fromIceTPidSet (T.EVar v _)
+fromIceTPidSet pid (T.EVar v _)
   = mkPidSet v
-fromIceTPidSet e
-  = abort "fromIceTPidSet" e
-
+fromIceTPidSet pid e
+  = mkPidSet (fromIceTExpr pid e)
 
 ---------------------------------------------------
-fromIceTExpr :: (Show a, HasType a) => ProcessId -> IceTExpr a -> Doc
+fromIceTExpr :: (Show a, HasType a)
+             => ProcessId -> IceTExpr a -> Doc
 ---------------------------------------------------
+fromIceTExpr _ (T.EVal (Just (T.CInt i)) _)
+  = prolog i
 fromIceTExpr _ (T.EAny t l)
   = prolog "_"
 fromIceTExpr _ (T.EVar v l)
   = prolog v
 fromIceTExpr _ (T.EType t _)
   = prolog t
+fromIceTExpr pid (T.ECon c [] _)
+  = prolog (cstrId c)
 fromIceTExpr pid (T.ECon c es _)
-  = compoundTerm c (fromIceTExpr pid <$> es)
+  = compoundTerm (cstrId c) (fromIceTExpr pid <$> es)
 fromIceTExpr pid (T.ECase t e alts d l)
-  = mkCases (prolog pid) (fromIceTExpr pid e) cases
+  = mkCases (prolog pid) (fromIceTExpr pid e) cases dflt
   where
     cases
-      = (goCase <$> alts) ++
-        maybe [] (return . mkDefaultCase ppid . fromIceTExpr pid) d
+      = goCase <$> alts
+    dflt
+      = (mkDefault ppid . fromIceTExpr pid) <$> d
     goCase (c,xs,e)
       = mkCase ppid (fromIceTExpr pid (T.ECon c (flip T.EVar l <$> xs) l))
                     (fromIceTExpr pid e)
@@ -132,11 +138,14 @@ fromIceTExpr pid (T.EField e i _)
   = mkField (prolog pid) [fromIceTExpr pid e, prolog i]
 fromIceTExpr pid (T.ESymElt e _)
   = compoundTerm "nonDet" [prolog pid, fromIceTExpr pid e]
+fromIceTExpr pid (T.EApp e1 e2 l)
+  | Just t <- getType l
+  = fromIceTExpr pid (T.EAny (T.EType t l) l)
 fromIceTExpr pid e
   = abort "fromIceTExpr" e
 
-mkPidSet (s0:s)  
-  = compoundTerm "set" [prolog (toLower s0 : s)]
+mkPidSet s  
+  = compoundTerm "set" [prolog s]
 
 mkFail :: Doc -> Doc
 mkFail p = compoundTerm "die" [p]
@@ -177,17 +186,17 @@ mkWhile = mkAction "while" 1
 mkForEach :: Doc -> [Doc] -> Doc
 mkForEach = mkAction "for" 3
 
-mkCases :: Doc -> Doc -> [Doc] -> Doc
-mkCases pid x cases = compoundTerm "cases" [pid, x, listTerms cases]
+mkCases :: Doc -> Doc -> [Doc] -> Maybe Doc -> Doc
+mkCases pid x cases d
+  = compoundTerm "cases" ([pid, x, listTerms cases] ++ d')
+  where
+    d' = maybe [] return d
 
 mkCase :: Doc -> Doc -> Doc -> Doc
 mkCase pid e s = compoundTerm "case" [pid, e, s]
 
-mkDefaultCase :: Doc -> Doc -> Doc
-mkDefaultCase pid s = compoundTerm "case" [ pid
-                                          , compoundTerm "default" []
-                                          , s
-                                          ]
+mkDefault :: Doc -> Doc -> Doc
+mkDefault pid s = compoundTerm "default" [pid, s]
 
 mkAction f n pid args
   = compoundTerm f (pid : checkLen n args)
@@ -216,25 +225,39 @@ compoundTerm n ds
   = prolog n <> tupleTerms ds
 
 class Prolog a where
-  prolog    :: a -> Doc
-  prologPid :: a -> Doc
+  prolog     :: a -> Doc
+  prologPid  :: a -> Doc
+
+instance Prolog Doc where
+  prolog    = id
+  prologPid = id
 
 instance Prolog String where
-  prolog = text . last . textNoDots
+  prolog = text
+         . (concatMap repl)
+         . last
+         . textNoDots
+    where
+      repl '\'' = "_"
+      repl '.'  = "__"
+      repl c    = [c]
 
   prologPid pid@(s:_)
     | isUpper s = compoundTerm "e_pid" [text pid]
     | otherwise = compoundTerm "e_var" [text pid]
 
-textNoDots s
-  = case dropWhile isDot s of
-      "" -> []
-      s' -> w : textNoDots s''
-        where
-          (w, s'') = break isDot s'
-  where
-    isDot c = c == '.'
+cstrId = makeLower "cstr__"
+typeId = makeLower "ty__"
 
+makeLower :: String -> String -> String
+makeLower pre  s
+  = intercalate "." (hd ++ [pre ++ lst])
+  where
+    lst :: String
+    lst = last ss
+    hd = init ss
+    ss :: [String]
+    ss = textNoDots s
 
 instance Prolog Int where
   prolog    = int
@@ -252,5 +275,7 @@ instance Prolog b => Prolog (T.Type b) where
     = compoundTerm "tyApp" [prolog t1, prolog t2]
   prolog (T.TyFun t1 t2)
     = compoundTerm "tyFun" [prolog t1, prolog t2]
+  prolog (T.TyConApp t [])
+    = compoundTerm "tyCon" [text "ty__" <> prolog t]
   prolog (T.TyConApp t ts)
-    = compoundTerm "tyCon" (prolog t : fmap prolog ts)
+    = compoundTerm "tyCon" ((text "ty__" <> prolog t) : fmap prolog ts)

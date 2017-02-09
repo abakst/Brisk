@@ -8,11 +8,13 @@ module Brisk.Model.IceT where
 import           Name
 import           Type
 import           Control.Monad.Trans.State
+import           Data.List
 import           Data.Maybe
 import           Brisk.Pretty
 import           Brisk.Model.GhcInterface
 import qualified Brisk.Model.Types as E
 import           Brisk.UX
+import           Text.PrettyPrint.HughesPJ
 
 type ProcessId = String
 
@@ -20,7 +22,7 @@ type IceTExpr a = E.EffExpr E.Id a
 type IceTType   = E.Type E.Id
 
 data IceTStmt a = Send IceTType (IceTExpr a) (IceTExpr a)
-                | Recv IceTType (Maybe E.Id)
+                | Recv IceTType (Maybe (IceTExpr a)) (Maybe E.Id)
                 | Assgn E.Id (Maybe IceTType) (IceTExpr a)
                 | Seq [IceTStmt a]
                 | Case (IceTExpr a) [(IceTExpr a, IceTStmt a)] (Maybe (IceTStmt a))
@@ -30,6 +32,7 @@ data IceTStmt a = Send IceTType (IceTExpr a) (IceTExpr a)
                 | Fail
                 | Skip
                 | Continue
+                | Exec (IceTExpr a)
                   deriving (Show, Eq)
 
 data IceTProcess a = Single  ProcessId (IceTStmt a)
@@ -37,11 +40,25 @@ data IceTProcess a = Single  ProcessId (IceTStmt a)
                      deriving Show
 
 data IceTState a = IS { current   :: Char
+                      , next      :: Char
                       , recFns    :: [(E.Id, [E.Id])]
                       , par       :: [IceTProcess a]
                       , params    :: [E.Id]
                       , paramSets :: [(E.Id, IceTExpr a)]
                       }
+
+substStmt :: (E.Annot a) => E.Id -> IceTExpr a -> IceTStmt a -> IceTStmt a
+substStmt x e = go
+  where
+    sub                = E.subst x e 
+    go (Send t p m)    = Send t (sub p) (sub m) 
+    go (Assgn x t e)   = Assgn x t (sub e)
+    go (Seq ss)        = Seq (go <$> ss)
+    go (Case e alts d) = Case (sub e) (fmap go <$> alts) (go <$> d)
+    go (ForEach x e s) = ForEach x (sub e) (go s)
+    go (While s)       = While (go s)
+    go s               = s
+                   
 
 class HasType a where
   getType :: a -> Maybe IceTType
@@ -89,6 +106,7 @@ flattenSeq (Seq ss)
     go ss Skip      = ss
     go ss s         = ss ++ [s]
     ss'             = flattenSeq <$> ss
+    dropSingleton (Seq [])  = Skip
     dropSingleton (Seq [s]) = s
     dropSingleton s         = s
 flattenSeq (ForEach x y s)
@@ -102,11 +120,11 @@ simplifySkips (Seq ss) = Seq ss'
         isSkip Skip = True
         isSkip _    = False
 
-runIceT :: (Show a, HasType a) => IceTExpr a -> [IceTProcess a]
+runIceT :: (Show a, HasType a, E.Annot a) => IceTExpr a -> [IceTProcess a]
 runIceT e
   = anormalizeProc <$> (Single "A" stmt : par st)
   where
-    ((stmt, _), st) = runState (fromTopEffExp e) (IS 'A' [] [] [] [])
+    ((stmt, _), st) = runState (fromTopEffExp e) (IS 'A' 'B' [] [] [] [])
 
 ---------------------------------------------------
 anormalizeProc :: (Show a, HasType a)
@@ -117,7 +135,7 @@ anormalizeProc (Single p s)     = Single p (anormalize s)
 anormalizeProc (ParIter p ps s) = ParIter p ps (anormalize s)
 
 ---------------------------------------------------
-fromTopEffExp :: (Show a, HasType a)
+fromTopEffExp :: (Show a, HasType a, E.Annot a)
               => IceTExpr a
               -> ITM a (IceTStmt a, Maybe (IceTExpr a))
 ---------------------------------------------------
@@ -130,14 +148,18 @@ fromTopEffExp eff
   = fromEffExp [] eff Nothing
 
 ---------------------------------------------------
-fromEffExp :: (Show a, HasType a)
+fromEffExp :: (Show a, HasType a, E.Annot a)
            => Store a
            -> IceTExpr a
            -> Maybe E.Id
            -> ITM a (IceTStmt a, Maybe (IceTExpr a))
 ---------------------------------------------------
 fromEffExp s (E.EPrimOp E.Recv [E.EType t _] l) x
-  = return (Recv t x, flip E.EVar l <$> x)
+  = return (Recv t Nothing x, flip E.EVar l <$> x)
+
+fromEffExp s (E.EPrimOp E.Recv [E.EType t _, e] l) x
+  = do e' <- fromPure s e
+       return (Recv t (Just e') x, flip E.EVar l <$> x)
 
 fromEffExp s (E.EPrimOp E.Send [E.EType t _, p, m] l) x
   = do to  <- fromPure s p
@@ -153,11 +175,11 @@ fromEffExp s (E.EPrimOp E.SymSpawn [xs, p] l) x
 fromEffExp s (E.EPrimOp E.Bind [e1, E.ELam x e2 l2] l1) y
   = fromBind s l1 l2 e1 x e2 y
 
-fromEffExp s (E.EPrimOp E.Return [e] _) y
+fromEffExp s (E.EPrimOp E.Return [e] l) y
   = do e' <- fromPure s e
        return (Skip, Just e')
 
-fromEffExp s (E.EPrimOp E.FoldM [E.ELam x (E.ELam a body _) _, base, xs] l) y       
+fromEffExp s (E.EPrimOp E.FoldM [E.ELam a (E.ELam x body _) _, base, xs] l) y       
   = fromEffExp s  E.EPrRec { E.precAcc = a
                            , E.precNext = x
                            , E.precBody = body
@@ -167,20 +189,24 @@ fromEffExp s (E.EPrimOp E.FoldM [E.ELam x (E.ELam a body _) _, base, xs] l) y
                            } y
 
 fromEffExp s (E.EPrRec acc x body acc0 xs l) mx
-  = do (stmt, _) <- fromEffExp s' body mx
+  = do (stmt, _) <- fromEffExp s' body (Just acc)
        exs       <- fromPure s xs
-       return (foreach stmt exs, Nothing)
+       a0        <- fromPure s acc0
+       return (foreach stmt exs a0, Nothing)
   where
-    s' = addsStore l s [acc, x]
-    foreach s exs = ForEach x exs s
-
+    s'               = addsStore l s [acc, x]
+    foreach s exs a0 = seqStmts [ Assgn acc (getType a0) a0
+                                , ForEach x exs s
+                                ]
 
 fromEffExp s (E.EPrimOp E.Self [] l) _
   = do me <- gets current
-       return (Skip, Just (E.EVar [me] (setType t' l)))
+       return (Skip, Just (E.EVar [me] (setType ty l)))
          where
-           t' = go <$> getType l
-           go = head . snd . E.splitAppTys
+           go (E.TyConApp _ [t]) = t
+           ty                    = go <$> getType l
+            
+           -- go = head . snd . E.splitAppTys
 
 fromEffExp s app@(E.EApp _ _ l) _
   = fromApp l s f as
@@ -192,20 +218,25 @@ fromEffExp s r@(E.ERec f e l) _
 
 fromEffExp s (E.ECase t e alts mdefault l) x
   = do a     <- fromPure s e
-       alts' <- mapM (fromAlt l s t) alts
+       alts' <- mapM (fromAlt l s t x) alts
        d'    <- fromDefault mdefault
-       return $ (Case a alts' d', (flip E.EVar l <$> x))
+       return (simplifyCase $ Case a alts' d', (flip E.EVar l <$> x))
          where
            fromDefault Nothing  = return Nothing
            fromDefault (Just d) = do
-             (st,_) <- fromEffExp s d Nothing
-             return (Just st)
+             (st,e) <- fromEffExp s d Nothing
+             return (Just $ seqStmts [st, mkAssignMb x e])
+           mkAssignMb (Just x) (Just e)
+             = mkAssigns [(x,e)]
+           mkAssignMb _ _
+             = Skip
+           
 
 fromEffExp s v@(E.EVar x l) _
   = recCall x >>= go
   where
     go (Just []) = return (Continue, Nothing)
-    go _         = return (Skip, Just v)
+    go _         = return (Exec v, Nothing)
 
 fromEffExp s e@(E.EVal x _) _    
   = return (Skip, Just e)
@@ -250,11 +281,19 @@ fromPure s a@E.EAny{}
   = return a
 fromPure s (E.ESymElt set l)
   = E.ESymElt <$> fromPure s set <*> pure l
+fromPure s (E.EApp e1 e2 l)
+  = E.EApp <$> fromPure s e1 <*> fromPure s e2 <*> pure l
+fromPure s (E.ELam x e l)
+  = let s' = extendStore s x (E.EVar x l)
+    in E.ELam x <$> fromPure s' e <*> pure l
+fromPure s (E.ERec x e l)
+  = let s' = extendStore s x (E.EVar x l)
+    in E.ERec x <$> fromPure s' e <*> pure l
 fromPure s e
   = abort "fromPure" e
 
 ---------------------------------------------------
-fromApp :: (Show a, HasType a)
+fromApp :: (Show a, HasType a, E.Annot a)
         => a
         -> Store a
         -> IceTExpr a
@@ -305,24 +344,29 @@ mkWhileLoop l f stmt e
     mkAssgn e = Assgn retx (getType e) e
 
 ---------------------------------------------------
-fromAlt :: (Show a, HasType a)
+fromAlt :: (Show a, HasType a, E.Annot a)
         => a
         -> Store a
         -> IceTType
+        -> Maybe E.Id
         -> (E.Id, [E.Id], IceTExpr a)
         -> ITM a (IceTExpr a, IceTStmt a)
 ---------------------------------------------------
-fromAlt l s t (c, xs, e)
-  = do (stmt, _) <- fromEffExp s' e Nothing
-       return (a, stmt)
+fromAlt l s t x (c, xs, e)
+  = do (stmt, e') <- fromEffExp s' e x
+       return (a, seqStmts [stmt, mkAssign x e'])
   where
-    es         = flip E.EVar l <$> xs
-    a          = E.ECon c es l
-    s'         = foldl go s (zip xs es)
-    go s (x,e) = extendStore s x e
+    mkAssign (Just x) (Just e)
+      = mkAssigns [(x,e)]
+    mkAssign _ _
+      = Skip
+    es           = flip E.EVar l <$> xs
+    a            = E.ECon c es l
+    s'           = foldl go s (zip xs es)
+    go s (x,e)   = extendStore s x e
 
 ---------------------------------------------------
-fromSpawn :: (Show a, HasType a)
+fromSpawn :: (Show a, HasType a, E.Annot a)
           => a
           -> Store a
           -> IceTExpr a
@@ -330,15 +374,14 @@ fromSpawn :: (Show a, HasType a)
           -> ITM a (IceTStmt a, Maybe (IceTExpr a))
 ---------------------------------------------------
 fromSpawn l s p x
-  = do me     <- gets current
-       let them    = succ me
+  = do them <- newPidM
        withCurrentM them $ do
          (pSpawn, _) <- fromEffExp s p x
          addProcessM (Single [them] pSpawn)
          return $ (Skip, Just (E.EVar [them] l))
 
 ---------------------------------------------------
-fromSymSpawn :: (Show a, HasType a)
+fromSymSpawn :: (Show a, HasType a, E.Annot a)
              => a
              -> Store a
              -> IceTExpr a
@@ -348,12 +391,16 @@ fromSymSpawn :: (Show a, HasType a)
 ---------------------------------------------------
 fromSymSpawn l s xs p x
   = do me     <- gets current
-       let them    = succ me
-           themSet = them : "_Set"
+       them   <- newPidM
+       let themSet = them : "_Set"
        withCurrentM them $ do
          (pSpawn, _) <- fromEffExp s p x
          addProcessM (ParIter [them] themSet pSpawn)
          return (Skip, Just (E.EVar themSet l))
+
+newPidM = do who <- gets next
+             modify $ \s -> s { next = succ who }
+             return who
 
 addProcessM :: IceTProcess a -> ITM a ()
 addProcessM p
@@ -367,7 +414,7 @@ withCurrentM p act = do q <- gets current
                         return r
 
 ---------------------------------------------------
-fromBind :: (Show a, HasType a)
+fromBind :: (Show a, HasType a, E.Annot a)
          => Store a
          -> a
          -> a
@@ -384,7 +431,7 @@ fromBind s l1 l2 e1 x e2 y
        return (flattenSeq $ Seq [p1, p2], v2)
 
 ---------------------------------------------------
-fromProcess :: (Show a, HasType a)
+fromProcess :: (Show a, HasType a, E.Annot a)
             => a
             -> Store a
             -> IceTExpr a
@@ -393,13 +440,30 @@ fromProcess :: (Show a, HasType a)
 ---------------------------------------------------
 fromProcess l = fromEffExp
 
+simplifyCase :: E.Annot a => IceTStmt a -> IceTStmt a
+simplifyCase st@(Case (E.ECon c xs _) alts _)
+  = fromMaybe st $ go alts
+  where
+    go []
+      = Nothing
+    go ((E.ECon c' xs' _, s):as)
+      | c == c' && length xs == length xs'
+      = foldl' app (Just s) (zip xs' xs)
+      | otherwise
+      = go as
+    app s (E.EVar x _,e) = substStmt x e <$> s
+    app s _                       = Nothing
+simplifyCase s = s
+
 type ANFM a = State Int a
 
 ---------------------------------------------------
 anormalize :: (Show a, HasType a) => IceTStmt a -> IceTStmt a
 ---------------------------------------------------
 anormalize s = evalState (anf s) 0
-  
+
+-- This anormalization just makes sure that sends have
+-- immediate arguments, that's all
 ---------------------------------------------------
 anf :: (Show a, HasType a) => IceTStmt a -> ANFM (IceTStmt a)
 ---------------------------------------------------
@@ -415,25 +479,25 @@ anf (Send t e1 e2)
   = do (x, bs1) <- imm e1
        (y, bs2) <- imm e2
        return (stitch (bs1 ++ bs2) (Send t x y))
-anf (Assgn x t e)
-  = do (e', bs) <- imm e
-       return $ stitch bs (Assgn x t e')
+anf s@(Assgn x t e)
+  = return s
 anf (Seq ss)
   = Seq <$> mapM anf ss
 anf (While s)
   = While <$> anf s
 anf (Case e es d)
-  = do (e', bs) <- imm e
-       es'      <- mapM anfAlt es
+  = do es'      <- mapM anfAlt es
        d'       <- mapM anf d
-       return (stitch bs (Case e' es' d'))
+       return (Case e es' d')
          where
            anfAlt (pat, s) = do s' <- anf s
                                 return (pat, s')
 anf (ForEach x xs s)
-  = do (xs', bs) <- imm xs
-       s'        <- anf s
-       return (stitch bs (ForEach x xs' s'))
+  = do s'        <- anf s
+       return (ForEach x xs s')
+anf (Exec e)
+  = do (e', bs) <- imm e
+       return (stitch bs $ Exec e')
 anf s
   = abort "anf" s
 
@@ -449,7 +513,7 @@ imm (E.ESymElt s l)
 imm e@E.EVar{}
   = return (e, [])
 imm e@(E.EVal _ _)
-  = abort "imm" e
+  = return (e, [])
 imm (E.ECon c args l)
   = do x <- fresh l
        (immArgs, bs) <- unzip <$> mapM imm args
@@ -463,6 +527,8 @@ imm e@E.EField {}
        return (x, [(E.varId x, e)])
 -- imm e@(E.ELam b bdy a)
 --   = return (e, [])
+imm e@(E.EApp e1 e2 l)
+  = return (e, [])
 imm e
   = abort "imm" e
 
@@ -476,3 +542,57 @@ stitch bs s = seqStmts (assigns ++ [s])
   where
     assigns   = go <$> bs
     go (x, e) = Assgn x (getType e) e
+
+instance Pretty (IceTStmt a) where
+  ppPrec _ (Exec e)
+    = text "exec" <> (E.tuple [pp e])
+  ppPrec _ (Send t p m)
+    = text "send" <> brackets (pp t)
+                  <> E.tuple [pp p, pp m]
+
+  ppPrec _ (Recv t w Nothing)
+    = ppRecv t w
+
+  ppPrec _ (Recv t w (Just x))
+    = pp x <+> text ":=" <+> ppRecv t w
+
+  ppPrec _ (Assgn x _ e)
+    = pp x <+> text ":=" <+> pp e
+
+  ppPrec _ (Seq ss)
+    = vcat (ppPrec 0 <$> ss)
+
+  ppPrec _ (Case e alts mdf)
+    = text "match" <+> pp e <> colon $$
+      nest 2 (vcat (ppAlt <$> alts)) $$
+      nest 2 (ppDflt mdf)
+    where
+      ppAlt (e,s) = text "case" <+> pp e <> colon $$
+                    nest 2 (ppPrec 0 s)
+      ppDflt Nothing  = empty
+      ppDflt (Just s) = text "__DEFAULT__:" $$ nest 2 (ppPrec 0 s)
+
+  ppPrec _ (ForEach x e s)
+    = text "for" <+> pp x <+> text "in" <+> pp e <> colon $$
+      nest 2 (ppPrec 0 s)
+
+  ppPrec _ (While s)
+    = text "while true" <> colon $$
+      nest 2 (ppPrec 0 s)
+
+  ppPrec _ Fail     = text "abort"
+  ppPrec _ Skip     = text "skip"
+  ppPrec _ Continue = text "continue"
+
+ppRecv t Nothing 
+  = text "recv" <> brackets (pp t)
+ppRecv t (Just w)
+  = text "recvFrom" <> brackets (pp t) <> parens (pp w)
+                  
+instance Pretty (IceTProcess a) where
+  ppPrec _ (Single p s)
+    = text "proctype" <+> text p <> colon $$
+      nest 2 (pp s)
+  ppPrec _ (ParIter p ps s)
+    = text "proctype" <+> text p <> colon $$
+      nest 2 (pp s)

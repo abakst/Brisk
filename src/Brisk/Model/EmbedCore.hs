@@ -28,6 +28,7 @@ import Data.Serialize
 import Data.Data hiding (mkTyConApp)
 import Data.Word
 import GHC.Word
+import LoadIface (loadInterfaceForModule)
 
 -- type Ann         = (Maybe Type, SrcSpan)
 -- type EffExprBare = EffExpr Id Ann
@@ -43,20 +44,28 @@ tabName mod = do u <- getUniqueM
 
 retrieveAllSpecs :: HscEnv -> ModGuts -> CoreM [SpecTableIn]
 retrieveAllSpecs env mg
-  = catMaybes <$> mapM (retrieveIfExport env mg) mods
+  = catMaybes <$> mapM (retrieveIfExport env mg) (usedModules mg)
   where
-    mods = usedModules mg
     retrieveIfExport env mg mod
       = whenExports env mg mod tabOccName $ retrieveSpecs env mod
 
 retrieveSpecs :: HscEnv -> Module -> CoreM SpecTableIn
 retrieveSpecs env mod
-  = do origNm <- liftIO . initTcForLookup env $
+  = do origNm <- liftIO . initTcForLookup env $ do
+         loadInterfaceForModule (text "retrieveSpecs") mod
          lookupOrig mod tabOccName
-       words <- liftIO $ getValueSafely env origNm stringTy
-       case words of
-         Nothing -> abort "retrieveSpecs" ":("
-         Just words' -> return (wordsToSpecTable words')
+       liftIO $ do
+         linkModule env mod
+         hv <- getHValue env origNm  :: IO HValue
+         v  <- lessUnsafeCoerce unsafeGlobalDynFlags "retrieveSpecs" hv
+         return (wordsToSpecTable v)
+       -- Is the above even safe ^^^^ ????
+       -- Can this safely be deleted (???):
+       -- liftIO $ putStrLn "HERE"
+       -- words <- liftIO $ getValueSafely env origNm stringTy
+       -- case words of
+       --   Nothing -> abort "retrieveSpecs" ":("
+       --   Just words' -> return (wordsToSpecTable words')
 
 -------------------------------------------
 -- Functions for *embedding* specifications
