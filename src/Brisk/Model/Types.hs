@@ -35,7 +35,7 @@ import qualified Data.ByteString.UTF8 as B8
 import qualified Codec.Binary.UTF8.String as B8String
 import qualified Type as T
 import TyCon
-import qualified TypeRep as Tr
+import qualified TyCoRep as Tr
 import Data.Word
 import GHC.Word
 
@@ -59,7 +59,10 @@ instance Functor (Pred b)  where
   fmap _ PTrue         = PTrue
 
 data Const = CInt Int          
+           | CPid Id
+           | CPidSet Id
            deriving (Eq, Show, Generic)
+
 instance Serialize Const 
 
 data Op = Eq | Le | NEq | Plus | Minus
@@ -75,7 +78,7 @@ data Type b = -- ^ Essentially a mirror of GHC's Type
   | TyConApp b [Type b]
   | TyFun (Type b) (Type b)
   | TyForAll b (Type b)
-    deriving (Eq, Show, Generic)
+    deriving (Eq, Ord, Show, Generic)
 instance Serialize b => Serialize (Type b)
 
 type Subset b a = (b, T.Type, Pred b a)
@@ -130,14 +133,19 @@ ofType f g = go
   where
     go (Tr.TyVarTy v)
       = TyVar . g $ getName v
-    go (Tr.AppTy t1 t2)
-      = TyApp (go t1) (go t2)
+    go (Tr.TyConApp tc [t1, t2])
+      | isFunTyCon tc
+      = TyFun (go t1) (go t2)
     go (Tr.TyConApp tc ts)
       = TyConApp (f tc) (go <$> ts)
-    go (Tr.FunTy t1 t2)
-      = TyFun (go t1) (go t2)
+    go (Tr.AppTy t1 t2)
+      = TyApp (go t1) (go t2)
+    -- go (Tr.FunTy t1 t2)
     go (Tr.ForAllTy v t)
-      = TyForAll (g . getName $ v) (go t)
+      | Just n <- T.binderVar_maybe v
+      = TyForAll (g . getName $ n) (go t)
+      | otherwise
+      = go t
 
 tyVarName :: String -> String    
 tyVarName (s0:s)
@@ -154,15 +162,44 @@ splitAppTys t = abort "splitAppTys" t
 ----------------------------------------------- 
 -- | Operations on Expressions  
 ----------------------------------------------- 
+txExprPid :: (Id -> a -> EffExpr b a) -> EffExpr b a -> EffExpr b a
+txExprPid f
+  = txExprIds (\v l -> EVar v l) f
+
+txExprVars :: (b -> a -> EffExpr b a) -> EffExpr b a -> EffExpr b a    
+txExprVars f
+  = txExprIds f (\p l -> EVal (Just (CPid p)) l)
+
+txExprIds :: (b -> a -> EffExpr b a)
+          -> (Id -> a -> EffExpr b a)
+          -> EffExpr b a
+          -> EffExpr b a
+txExprIds f g
+  = go
+  where
+    go (EVar x l)               = f x l
+    go (EVal (Just (CPid x)) l) = g x l -- EVal (Just (CPid (f x))) l
+    go (ESymElt e l)            = ESymElt (go e) l
+    go (ECon c es l)            = ECon c (go <$> es) l
+    go (ELam b m l)             = ELam b (go m) l
+    go (EApp m n l)             = EApp (go m) (go n) l
+    go (EPrRec a x m b e l)     = EPrRec a x (go m) (go b) (go e) l
+    go (ERec x e l)             = ERec x (go e) l
+    go (ECase t a alts d l)     = ECase t (go a) (goAlt <$> alts) (go <$> d) l
+      where goAlt (x,y,z) = (x,y,go z)
+    go (EPrimOp op args l)      = EPrimOp op (go <$> args) l
+    go e                        = e
+
 defaultEffExpr :: a -> Tr.Type -> EffExpr Id a 
 defaultEffExpr a = go
-  where go (Tr.FunTy t0 t)
-          | T.isDictTy t0
+  where go (Tr.TyConApp tc [t0, t])
+          | isFunTyCon tc && T.isDictTy t0
           = go t 
-          | otherwise
+          | isFunTyCon tc
           = ELam "_" (go t) a
-        go (Tr.ForAllTy tv t)
-          = ELam (nameId (getName tv)) (go t) a
+        go (Tr.ForAllTy v t)
+          | Just n <- T.binderVar_maybe v
+          = ELam (nameId (getName n)) (go t) a
         go t
           = EAny (EType (ofType tyConId nameId t) a) a
     
@@ -278,11 +315,11 @@ class Ord b => Subst b a where
   subst   :: b -> a -> a -> a
   fv      :: a -> Set.Set b 
 
-class ToTyVar b where
-  toTyVar :: b -> T.TyVar
+-- class ToTyVar b where
+--   toTyVar :: b -> T.TyVar
 
-instance ToTyVar Id where
-  toTyVar = mkTyVar
+-- instance ToTyVar Id where
+--   toTyVar = mkTyVar
 
 instance Pretty b => Pretty (Type b) where
   ppPrec _ (TyVar b) = pp b
@@ -353,7 +390,9 @@ tuple :: [Doc] -> Doc
 tuple xs = parens (hcat (punctuate comma xs))
 
 instance Pretty Const where
-  ppPrec _ (CInt i) = int i
+  ppPrec _ (CInt i)     = int i
+  ppPrec _ (CPid p)     = text "%" <> text p
+  ppPrec _ (CPidSet ps) = text "%" <> text ps
 
 instance (Pretty b, Pretty (EffExpr b a)) => Pretty (Pred b a) where
   ppPrec _ (Rel o p1 p2) = parens (pp p1) <+> pp o <+> parens (pp p2)
@@ -394,7 +433,7 @@ spacesPrec n = foldl (<+>) empty . map (ppPrec n)
 spaces :: Pretty a => [a] -> Doc
 spaces = spacesPrec 0
 
-instance (Avoid b, Annot a, ToTyVar b, Ord b) => Subst b (EffExpr b a) where
+instance (Avoid b, Annot a, Ord b) => Subst b (EffExpr b a) where
   fv    = fvExpr
   subst = substExpr False
 
@@ -409,7 +448,7 @@ instance Ord b => Subst b (Type b) where
       go (TyFun t1 t2) = TyFun (go t1) (go t2)
 
 -- A dirty hack, but maybe not so dirty
-substExpr :: (Avoid b, Annot a, ToTyVar b,  Ord b)
+substExpr :: (Avoid b, Annot a, Ord b)
           => Bool -> b -> EffExpr b a -> EffExpr b a -> EffExpr b a
 substExpr b x a = go
     where
@@ -452,7 +491,7 @@ substExpr b x a = go
             EType t' l' -> EType (subst x t' t)  l
             _           -> ty
 
-fvExpr :: (Avoid b, Annot a, ToTyVar b, Ord b) => EffExpr b a -> Set.Set b
+fvExpr :: (Avoid b, Annot a, Ord b) => EffExpr b a -> Set.Set b
 fvExpr (EAny t _)      = fv t
 fvExpr (ESymElt s _)   = fv s
 fvExpr (EVal _ _)      = Set.empty
@@ -470,10 +509,10 @@ fvExpr (EApp e1 e2 _)   = fv e1 `Set.union` fv e2
 fvExpr (EPrimOp o es _) = Set.unions (fv <$> es)
 fvExpr (EType t _)      = Set.empty
 
-fvAlts :: (Avoid b, Annot a, ToTyVar b, Ord b) => (b, [b], EffExpr b a) -> Set.Set b
+fvAlts :: (Avoid b, Annot a, Ord b) => (b, [b], EffExpr b a) -> Set.Set b
 fvAlts (_, xs, e) = fv e Set.\\ (Set.fromList xs)
 
-fvPred :: (Avoid b, Annot a, ToTyVar b, Ord b) => Pred b a -> Set.Set b
+fvPred :: (Avoid b, Annot a, Ord b) => Pred b a -> Set.Set b
 fvPred (PVal v ps)   = Set.unions (fvPred <$> ps) Set.\\ Set.singleton v
 fvPred (Rel _ p1 p2) = fvPred p1 `Set.union` fvPred p2
 fvPred (PEffect e)   = fv e
@@ -511,6 +550,13 @@ type SpecTableIn  = SpecTable AnnIn
 
 instance Serialize a => Serialize (SpecEntry a)
 instance Serialize a => Serialize (SpecTable a)
+
+instance Annot AnnIn where
+  dummyAnnot = Nothing
+
+lookupTable :: Id -> SpecTable a -> Maybe (EffExpr Id a)
+lookupTable b (SpecTable es)
+  = listToMaybe [ t | x :<=: t <- es ]
 
 specTableToWords :: SpecTableIn -> String
 specTableToWords = B8String.decode . B.unpack . encode

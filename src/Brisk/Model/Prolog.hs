@@ -29,21 +29,41 @@ toBrisk :: (Show a, HasType a, T.Annot a) => T.EffExpr T.Id a -> Doc
 toBrisk e = fromIceT (runIceT e)
 
 ---------------------------------------------------
-fromIceT :: (Show a, HasType a) => [IceTProcess a] -> Doc
+fromIceT :: (Show a, HasType a, T.Annot a) => [IceTProcess a] -> Doc
 ---------------------------------------------------
 fromIceT ps
   = mkPar (fromIceTProcess <$> ps)
 
 ---------------------------------------------------
-fromIceTProcess :: (Show a, HasType a) => IceTProcess a -> Doc
+fromIceTProcess :: (Show a, HasType a, T.Annot a) => IceTProcess a -> Doc
 ---------------------------------------------------
 fromIceTProcess (Single pid stmt)
-  = fromIceTStmt pid stmt
+  = fromIceTStmt pid (pullCaseAssignStmt stmt)
 fromIceTProcess (ParIter pid pidset stmt)
-  = mkSym (prolog pid) (mkPidSet pidset) (fromIceTStmt pid stmt)
+  = mkSym (prolog pid) (mkPidSet pidset) (fromIceTStmt pid (pullCaseAssignStmt stmt))
+
+pullCaseAssignStmt :: (Show a, HasType a) => IceTStmt a -> IceTStmt a  
+pullCaseAssignStmt (Case e alts d)
+  = Case e (goAlt <$> alts) (pullCaseAssignStmt <$> d)
+  where
+    goAlt (e,s) = (e, pullCaseAssignStmt s)
+pullCaseAssignStmt (Seq ss)
+  = Seq (pullCaseAssignStmt <$> ss)
+pullCaseAssignStmt (ForEach x xs s)
+  = ForEach x xs (pullCaseAssignStmt s)
+pullCaseAssignStmt (While s)
+  = While (pullCaseAssignStmt s)
+pullCaseAssignStmt (Assgn x t (T.ECase ty e alts d l))
+  = Case e stmtAlts stmtDflt
+  where
+    mkCon c xs = T.ECon c (flip T.EVar l <$> xs) l
+    stmtAlts   = [ (mkCon c xs, Assgn x t e) | (c,xs,e) <- alts ]
+    stmtDflt   = Assgn x t <$> d
+pullCaseAssignStmt s
+  = s
 
 ---------------------------------------------------
-fromIceTStmt :: (Show a, HasType a) => ProcessId -> IceTStmt a -> Doc
+fromIceTStmt :: (Show a, HasType a, T.Annot a) => ProcessId -> IceTStmt a -> Doc
 ---------------------------------------------------
 fromIceTStmt pid s@(Seq _)
   = mkSeq (fromIceTStmt pid <$> ss)
@@ -51,15 +71,15 @@ fromIceTStmt pid s@(Seq _)
     (Seq ss) = flattenSeq s
 
 fromIceTStmt pid (Send t p m)
-  = mkSend (prolog pid) [ prolog t
-                        , fromIceTPid pid p
+  = mkSend (prolog pid) [ fromIceTPid pid p
+                        , prolog t
                         , fromIceTExpr pid m
                         ]
 fromIceTStmt pid Skip
   = mkSkip
 
 fromIceTStmt pid (Recv ty w my)
-  = mkRecv (prolog pid) (wc ++ [ mkType [prolog ty], y])
+  = mkRecv (prolog pid) (wc ++ [mkType [prolog ty], y])
   where
     wc = maybe [] (return . fromIceTExpr pid) w
     y = case my of
@@ -74,8 +94,13 @@ fromIceTStmt pid (Case e cases d)
   where
     pCases
       = goCase <$> cases
-    goCase (e, s)
-      = mkCase ppid (fromIceTExpr pid e) (fromIceTStmt pid s)
+    goCase ((T.ECon c xs l), s)
+      = mkCase ppid (fromIceTExpr pid e') (fromIceTStmt pid s')
+      where
+        s'  = foldl' (\s (x,x') -> substStmt x x' s) s (zip bs xs')
+        e'  = T.ECon c xs' l
+        bs  = T.varId <$> xs
+        xs' = [ T.EVar (toUpper v0:v) l | (v0:v) <- bs ]
     defaultCase
       = (mkDefault ppid . fromIceTStmt pid) <$> d
     ppid = prolog pid
@@ -113,8 +138,12 @@ fromIceTExpr :: (Show a, HasType a)
 ---------------------------------------------------
 fromIceTExpr _ (T.EVal (Just (T.CInt i)) _)
   = prolog i
+fromIceTExpr _ (T.EVal (Just (T.CPid p)) _)
+  = prolog p
+fromIceTExpr _ (T.EVal (Just (T.CPidSet ps)) _)
+  = prolog ps
 fromIceTExpr _ (T.EAny t l)
-  = prolog "_"
+  = prolog "ndet"
 fromIceTExpr _ (T.EVar v l)
   = prolog v
 fromIceTExpr _ (T.EType t _)

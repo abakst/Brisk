@@ -1,3 +1,4 @@
+{-# language DoAndIfThenElse #-}
 module Brisk.Model.GhcInterface where
 
 import GhcPlugins
@@ -103,12 +104,19 @@ ghcTyName env mod ty
        m  <- lookupMod env (mkModuleName mod) 
        liftIO $ initTcForLookup env (lookupOrig m occNm)
 
-lookupMod :: HscEnv -> ModuleName -> IO Module
-lookupMod hsc_env mod_nm = do
+lookupModMaybe :: HscEnv -> ModuleName -> IO (Maybe Module)
+lookupModMaybe hsc_env mod_nm = do
     found_module <- findImportedModule hsc_env mod_nm Nothing
     case found_module of
-      Found _ md -> return md
-      _          -> error $ "Unable to resolve module looked up by plugin: " ++ moduleNameString mod_nm --      return t
+      Found _ md -> return (Just md)
+      _          -> return Nothing
+
+lookupMod :: HscEnv -> ModuleName -> IO Module
+lookupMod hsc_env mod_nm = do
+  mm <- lookupModMaybe hsc_env mod_nm
+  case mm of
+      Just md -> return md
+      _       -> error $ "Unable to resolve module looked up by plugin: " ++ moduleNameString mod_nm --      return t
 
 -- Distinguishing types & special expressions                    
 isRecordSel :: Var -> Bool
@@ -121,10 +129,10 @@ builtinName :: Int -> Name
 builtinName i
   = mkSystemName (mkUnique 'b' i) (mkVarOcc (show i))
 
-mkTyVar :: String -> TyVar  
-mkTyVar t = Var.mkTyVar nm anyKind
-  where
-    nm = mkSystemName (mkUnique 't' (sum (ord <$> t))) (mkTyVarOcc t)
+-- mkTyVar :: String -> TyVar  
+-- mkTyVar t = Var.mkTyVar nm anyKind
+--   where
+--     nm = mkSystemName (mkUnique 't' (sum (ord <$> t))) (mkTyVarOcc t)
 
 resolve :: HscEnv -> [(String, String, a)] -> IO [(Name, a)]
 resolve env binds
@@ -163,15 +171,15 @@ briskShowPpr = showSDoc unsafeGlobalDynFlags . ppr
 getImportedNames :: HscEnv -> ModGuts -> Module -> IO [Name]
 getImportedNames env mg mod
   = do epsPIT <- liftIO $ eps_PIT <$> hscEPS env
-       let enames = [ n | Avail n <- concat (mi_exports <$> lookupModuleEnv epsPIT mod)    ]
-           inames = [ n | Avail n <- concat (mi_exports . hm_iface <$> lookupUFM hpt muniq) ]
+       let enames = [ n | Avail _ n <- concat (mi_exports <$> lookupModuleEnv epsPIT mod)    ]
+           inames = [ n | Avail _ n <- concat (mi_exports . hm_iface <$> lookupUFM hpt muniq) ]
            muniq  = modUnique mod
            hpt    = hsc_HPT env
        return (enames ++ inames)
 
 exportedNames :: ModGuts -> [Name]        
 exportedNames mg
-  = [ n | Avail n <- mg_exports mg ]
+  = [ n | Avail _ n <- mg_exports mg ]
 
 whenExports :: MonadIO m => HscEnv -> ModGuts -> Module -> OccName -> m a -> m (Maybe a)       
 whenExports env mg mod nm act
@@ -181,8 +189,12 @@ whenExports env mg mod nm act
        else
          return Nothing
 
-usedModules :: ModGuts -> [Module]
-usedModules = nub . mapMaybe nameModule_maybe . uniqSetToList . mg_used_names
+usedModules :: ModGuts -> [ModuleName]
+usedModules mg = nub nms
+  where
+    nms = [ mn | UsageHomeModule { usg_mod_name = mn } <- mg_usages mg ]
+       ++ [ moduleName m | UsagePackageModule { usg_mod = m } <- mg_usages mg ]
+-- usedModules = nub . mapMaybe nameModule_maybe . uniqSetToList . mg_used_names
 
 modUnique :: Module -> Unique
 modUnique = getUnique . moduleName 

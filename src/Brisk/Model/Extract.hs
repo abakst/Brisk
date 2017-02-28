@@ -7,7 +7,7 @@ import GHC (GhcMonad)
 import GhcPlugins          hiding ((<+>), pp, text, Subst, Id, mkTyVar, tyVarName)
 import qualified GhcPlugins as Ghc
 import Type                as Ty
-import TypeRep             as Tr
+import TyCoRep             as Tr
 import Name
 import Control.Monad.Trans.State
 import Control.Monad.State  hiding (get, gets, modify)
@@ -115,8 +115,10 @@ isPure t
     go t (Tr.TyVarTy t')     = True
     go t (Tr.LitTy _)        = True
     go t (Tr.AppTy t1 t2)    = True
+    go t (Tr.TyConApp tc [_,t']) {- FunTy _ t') -}
+     | isFunTyCon tc
+     = go t t'
     go t (Tr.TyConApp tc ts) = cmp t tc
-    go t (Tr.FunTy _ t')     = go t t'
     go t (Tr.ForAllTy _ t')  = go t t'
     cmp t t' = nameId (getName t) /= nameId (getName t')
 
@@ -211,6 +213,9 @@ mGenExpr' g e@(App (Var i) l)
   | Just dc <- isDataConWorkId_maybe i,
     dc == intDataCon
   = mGenExpr' g l
+mGenExpr' g e@(App e1@(Var f) _)
+  | getName f == failMName
+  = error "AHA!!!!"
 mGenExpr' g e@(App e1@(Var f) e2@(Type t))
   | isMonadOp f, Just tc <- tyConAppTyCon_maybe t
   = do a <- mGenMonadOp f tc

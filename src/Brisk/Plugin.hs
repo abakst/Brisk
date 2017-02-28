@@ -4,7 +4,10 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module Brisk.Plugin (plugin) where
 
+import Data.IORef
 import Unique
+import StaticFlags
+import GHC (parseStaticFlags)
 import GHC.CString (unpackCString#)
 import GhcPlugins hiding (Id)
 import System.FilePath.Find
@@ -47,6 +50,9 @@ briskPlugin = defaultPlugin {
 installBrisk :: [CommandLineOption] -> [CoreToDo] -> CoreM [CoreToDo]  
 installBrisk bs todo
   = do reinitializeGlobals
+       liftIO $ do r <- readIORef v_opt_C_ready
+                   unless r $
+                     parseStaticFlags [] >> return ()
        return (CoreDoPluginPass "Brisk" (briskPass bs) : todo)
 
 briskPass :: [String] -> ModGuts -> CoreM ModGuts       
@@ -59,12 +65,11 @@ runBrisk bs mg binds
   = do hsenv        <- GhcPlugins.getHscEnv
        dynflags     <- getDynFlags
        annEnv       <- loadBriskAnns hsenv mg
-       let specMods = specModules mg annEnv
+       specMods     <- specModules hsenv mg annEnv
        let go (SpecTable entries) mod =
 
              do (SpecTable entries') <- retrieveSpecs hsenv mod
                 return (SpecTable (entries ++ entries'))
-       putMsgS (showSDoc dynflags (ppr specMods))
        specs0       <- retrieveAllSpecs hsenv mg
        let specTab0 = SpecTable (concat [ es | SpecTable es <- specs0 ])
        specs <- foldM go specTab0 specMods
@@ -86,7 +91,7 @@ runBrisk bs mg binds
            -- error "need to re-export exported spec modules"
            tabbind@(NonRec tabid _) <- embedSpecTable (mg_module mg) names tab'
            return $ mg { mg_binds   = binds ++ [tabbind]
-                       , mg_exports = mg_exports mg ++ [Avail $ getName tabid]
+                       , mg_exports = mg_exports mg ++ [Avail NotPatSyn $ getName tabid]
                        }
          _ -> return mg
          where
@@ -95,17 +100,22 @@ runBrisk bs mg binds
            handleUserError e@(ErrorCall _)
              = throwGhcException (ProgramError (displayException e))
 
-specModules :: ModGuts -> AnnEnv -> [Module]
-specModules mg annEnv
-  = [ mod | mod <- imports, isSpecMod annEnv mod ]
+specModules :: HscEnv -> ModGuts -> AnnEnv -> CoreM [Module]
+specModules env mg annEnv
+  = do mods      <- liftIO (catMaybes <$> mapM (lookupModMaybe env) modNms)
+       return ([ mod | mod <- mods, isSpecMod annEnv mod ]
+               ++ [ mod | mod <- dep_orphs (mg_deps mg), isSpecMod annEnv mod])
   where
-    imports   = fst <$> (moduleEnvToList $ mg_dir_imps mg)
+    imports = fst <$> (dep_mods (mg_deps mg))
+    mods0   = imports
+    mods1   = usedModules mg
+    modNms  = mods0 ++ mods1
 
 isSpecMod annEnv = not . null . lookupAnns annEnv ModuleTarget
 
 fixupSpecNames :: ModGuts -> SpecTableOut -> AnnEnv -> CoreM (SpecTableOut, [Name])
 fixupSpecNames mg (SpecTable specs) annEnv
-  = do let exported = [(nameId n, n') | Avail n   <- mg_exports mg
+  = do let exported = [(nameId n, n') | Avail _ n   <- mg_exports mg
                                       , Assume n' <- lookupAnns annEnv NamedTarget n
                                       ]
        exportedNames <- forM exported $ \(x,thn) ->

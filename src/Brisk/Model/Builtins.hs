@@ -96,7 +96,9 @@ builtin = SpecTable [
 
   , "GHC.Err.error"
     :<=:
-    ELam "A" (ELam "s" (EPrimOp Fail [] (Just (TyVar "A"))) Nothing) Nothing
+    ELam "R" (
+      ELam "A" (ELam "s" (EPrimOp Fail [] (Just (TyVar "A"))) Nothing) Nothing
+      ) Nothing
 
   , "Control.Distributed.Process.SymmetricProcess.expectFrom"
     :<=:
@@ -159,6 +161,10 @@ builtin = SpecTable [
     , "Brisk.Annotations.top"
       :<=:
       ELam "A" (EAny (EType (TyVar "A") Nothing) Nothing) Nothing
+
+    , "GHC.Base.fail"
+      :<=:
+      ELam "M" (ELam "A" (ELam "e" (EPrimOp Fail [] Nothing) Nothing) Nothing) Nothing
   ]
 {-
 builtin :: [(String, String, EffExpr Id ())]

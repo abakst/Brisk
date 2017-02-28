@@ -5,6 +5,7 @@
 {-# Language DeriveGeneric #-}
 module Brisk.Model.EmbedCore where
 
+import GHCi
 import GHC.Generics
 import Data.List
 import Control.Applicative hiding (Const)
@@ -22,13 +23,13 @@ import TcRnMonad
 import DynamicLoading
 import IfaceEnv
 import Linker
-import TypeRep
 import Generics.Deriving.TH
 import Data.Serialize
 import Data.Data hiding (mkTyConApp)
 import Data.Word
 import GHC.Word
 import LoadIface (loadInterfaceForModule)
+import GHC (HValue)
 
 -- type Ann         = (Maybe Type, SrcSpan)
 -- type EffExprBare = EffExpr Id Ann
@@ -44,19 +45,20 @@ tabName mod = do u <- getUniqueM
 
 retrieveAllSpecs :: HscEnv -> ModGuts -> CoreM [SpecTableIn]
 retrieveAllSpecs env mg
-  = catMaybes <$> mapM (retrieveIfExport env mg) (usedModules mg)
+  = do mods <- liftIO $ catMaybes <$> mapM (lookupModMaybe env) (usedModules mg)
+       catMaybes <$> mapM (retrieveIfExport env mg) mods
   where
     retrieveIfExport env mg mod
       = whenExports env mg mod tabOccName $ retrieveSpecs env mod
 
-retrieveSpecs :: HscEnv -> Module -> CoreM SpecTableIn
+retrieveSpecs :: MonadIO m => HscEnv -> Module -> m SpecTableIn
 retrieveSpecs env mod
   = do origNm <- liftIO . initTcForLookup env $ do
          loadInterfaceForModule (text "retrieveSpecs") mod
          lookupOrig mod tabOccName
        liftIO $ do
          linkModule env mod
-         hv <- getHValue env origNm  :: IO HValue
+         hv <- getHValue env origNm >>= wormhole unsafeGlobalDynFlags
          v  <- lessUnsafeCoerce unsafeGlobalDynFlags "retrieveSpecs" hv
          return (wordsToSpecTable v)
        -- Is the above even safe ^^^^ ????
