@@ -82,14 +82,9 @@ tyFromName env nm
 embedSpecTable :: Module -> [Name] -> SpecTableOut -> CoreM CoreBind
 embedSpecTable mod names tab@(SpecTable entries)
   = do t      <- tabName mod
-
-       -- liftIO $ forM_ [ (k,v) | k :<=: v <- entries'' ] $ \(k,v) ->
-       --   putStrLn (render (pp k <+> Brisk.Pretty.text " (output: )" <+> pp v))
-
        encoded <- mkStringExpr str
        return $ NonRec (mkExportedLocalId VanillaId t ty) encoded
          where
-           SpecTable entries'' = wordsToSpecTable str
            entries' = [ x :<=: fmap fst t | x :<=: t <- entries, x `elem` ids ]
            ids      = nameId <$> names
            str      = specTableToWords (SpecTable entries')

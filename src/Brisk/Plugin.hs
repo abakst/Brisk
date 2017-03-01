@@ -74,12 +74,8 @@ runBrisk bs mg binds
        specs0       <- retrieveAllSpecs hsenv mg
        let specTab0 = SpecTable (concat [ es | SpecTable es <- specs0 ])
        specs <- foldM go specTab0 specMods
-       liftIO $ putStrLn (ppShow specTab0)
-       liftIO $ putStrLn (ppShow specs)
        spec_tab <- liftIO . withExceptions $ do
          runMGen bs hsenv mg specs (deShadowBinds binds)
-
-       liftIO (putStrLn "OUTPUT")
        
        case spec_tab of
          Just tab -> do

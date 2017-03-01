@@ -88,8 +88,8 @@ data EffExpr b a =
    EVal    { valVal :: Maybe Const, annot :: a }
  | ESymElt { symSet :: EffExpr b a, annot :: a }
  | EVar    { varId :: b, annot :: a }                          -- ^ x
- | EAny    { anyTy  :: EffType b a, annot :: a }
  | ECon    { conId :: b, conArgs :: [EffExpr b a], annot :: a }
+ | EAny    { anyTy  :: EffType b a, annot :: a }
  | EField  { fieldExp :: EffExpr b a, fieldNo :: Int, annot :: a }
  | ELam    { lamId :: b, lamBody :: EffExpr b a, annot :: a }            -- ^ \x -> e
  | EApp    { appFun :: EffExpr b a, appArg :: EffExpr b a, annot :: a }

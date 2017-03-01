@@ -91,10 +91,6 @@ runMGen :: [String] -> HscEnv -> ModGuts -> SpecTableIn -> CoreProgram -> IO Spe
 runMGen bs hsenv mg specs@(SpecTable speccies) prog
   = do -- initBinds <- resolve hsenv (specTuple <$> specs)
        -- let g0    = Env.addsEnv Env.empty [ (nameId x, specAnnot <$> b) | (x,b) <- initBinds ]
-       putStrLn "INPUT"
-       forM_ [ (x,e) | x :<=: e <- speccies ] $ \(x,v) -> 
-         putStrLn (render (pp x <+> text ":=" <+> pp v))
-       
        let g0    = Env.unionEnvs (specTableEnv builtin) (specTableEnv specs)
        procTy    <- ghcTyName hsenv "Control.Distributed.Process.Internal.Types" "Process"
        g         <- evalStateT (go g0 prog) (initialEState hsenv mg procTy)
@@ -145,8 +141,6 @@ mGenBind g (NonRec x b)
   = return g
   | otherwise
   = do a <- mGenExpr g b
-       liftIO $ putStrLn (briskShowPpr x)
-       liftIO $ putStrLn (render (pp a))
        return (Env.insert g (bindId x) a)
 mGenBind g (Rec [(f,e)])
   = do let g' = Env.insert g n guess
@@ -193,11 +187,12 @@ mGenExpr' g v@(Var x)
   | otherwise
   = do pure <- isPure (idType x)
        s    <- currentSpan
-       -- when pure $ liftIO $ do
-       --   let t = defaultEffExpr (Nothing, s) (idType x)
-       --   putStrLn ("pure " ++ showSDoc unsafeGlobalDynFlags (ppr v))
-       --   putStrLn ("ghc ty: " ++ showSDoc unsafeGlobalDynFlags (ppr (idType x)))
-       --   putStrLn ("ty: " ++ render (pp t))
+
+{-       when pure $ liftIO $ do
+         let t = defaultEffExpr (Nothing, s) (idType x)
+         putStrLn ("pure " ++ showSDoc unsafeGlobalDynFlags (ppr v))
+         putStrLn ("ghc ty: " ++ showSDoc unsafeGlobalDynFlags (ppr (idType x)))
+         putStrLn ("ty: " ++ render (pp t)) -}
 
        if pure then
           return $ defaultEffExpr (Nothing, s) (idType x)
