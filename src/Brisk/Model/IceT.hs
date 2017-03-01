@@ -106,6 +106,15 @@ type ITM a r = State (IceTState a) r
 
 type Store a = [(E.Id, IceTExpr a)]
 
+lookupStoreDef :: Store a
+               -> E.Id
+               -> IceTExpr a
+               -> IceTExpr a
+lookupStoreDef s v d
+  = case lookup v s of
+      Nothing -> d
+      Just e  -> e
+
 lookupStore :: Store a -> E.Id -> IceTExpr a
 lookupStore s v
   = case lookup v s of
@@ -287,7 +296,7 @@ fromEffExp s e@E.ECon {} _
 fromEffExp s e _
   = error ("fromEffExpr:\n" ++ E.exprString e)
 
-fromPure :: (Show a)
+fromPure :: (Show a, HasType a)
          => Store a
          -> IceTExpr a
          -> ITM a (IceTExpr a)
@@ -310,13 +319,21 @@ fromPure s v@(E.EVar b l)
   = do ps <- gets params
        return $ if b `elem` ps
                   then v
-                  else lookupStore s b
+                  else case getType l of
+                         Just t -> 
+                           let d = E.EAny (E.EType t l) l in
+                           lookupStoreDef s b d
+                         Nothing ->
+                           let d = E.EVal Nothing l in
+                           lookupStoreDef s b d
 fromPure s a@E.EAny{}
   = return a
 fromPure s (E.ESymElt set l)
   = E.ESymElt <$> fromPure s set <*> pure l
 fromPure s (E.EApp e1 e2 l)
-  = E.EApp <$> fromPure s e1 <*> fromPure s e2 <*> pure l
+  = do v1 <- fromPure s e1
+       v2 <- fromPure s e2
+       return $ reduceApp v1 v2 l
 fromPure s (E.ELam x e l)
   = let s' = extendStore s x (E.EVar x l)
     in E.ELam x <$> fromPure s' e <*> pure l
@@ -327,6 +344,9 @@ fromPure _ t@(E.EType {})
   = return t
 fromPure s e
   = abort "fromPure" e
+
+reduceApp v1 v2 l
+  = E.EApp v1 v2 l
 
 ---------------------------------------------------
 fromApp :: (Show a, HasType a, E.Annot a)

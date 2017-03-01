@@ -56,7 +56,7 @@ library
                      , ghc
                      , ghc-prim
                      , containers
-                     , cereal
+                     , cereal == 0.5.2.0
                      , generic-deriving
                      , distributed-process
                      , distributed-static
@@ -93,8 +93,8 @@ executable brisk
                , ghc-paths
                , pretty-show
                , utf8-string
-               , bytestring
+               , bytestring == 0.10.6.0
                , containers
-               , cereal
+               , cereal == 0.5.2.0
                , pretty
                , transformers

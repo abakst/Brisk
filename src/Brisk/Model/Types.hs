@@ -38,6 +38,7 @@ import TyCon
 import qualified TyCoRep as Tr
 import Data.Word
 import GHC.Word
+import Debug.Trace
 
 type Id = String                 
 
@@ -85,9 +86,9 @@ type Subset b a = (b, T.Type, Pred b a)
 data EffExpr b a =
    -- EVal    { valPred :: Subset b a, annot :: a }                -- ^ {v | p}
    EVal    { valVal :: Maybe Const, annot :: a }
- | EAny    { anyTy :: EffType b a, annot :: a }
  | ESymElt { symSet :: EffExpr b a, annot :: a }
  | EVar    { varId :: b, annot :: a }                          -- ^ x
+ | EAny    { anyTy  :: EffType b a, annot :: a }
  | ECon    { conId :: b, conArgs :: [EffExpr b a], annot :: a }
  | EField  { fieldExp :: EffExpr b a, fieldNo :: Int, annot :: a }
  | ELam    { lamId :: b, lamBody :: EffExpr b a, annot :: a }            -- ^ \x -> e
@@ -197,9 +198,13 @@ defaultEffExpr a = go
           = go t 
           | isFunTyCon tc
           = ELam "_" (go t) a
-        go (Tr.ForAllTy v t)
+        go ft@(Tr.ForAllTy v t)
           | Just n <- T.binderVar_maybe v
           = ELam (nameId (getName n)) (go t) a
+          | T.isDictTy (T.funArgTy ft)
+          = go t
+          | otherwise
+          = ELam "_" (go t) a
         go t
           = EAny (EType (ofType tyConId nameId t) a) a
     
@@ -291,8 +296,16 @@ unfoldRec m@(ERec b e l)
 
 substAlt x a (c, bs, e) = (c, bs, subst x a e)  
 
-conEffExpr :: a -> T.Type -> DataCon -> EffExpr Id a  
-conEffExpr l t d = ECon (dataConId d) [] l
+conEffExpr :: Annot a => a -> T.Type -> DataCon -> EffExpr Id a  
+conEffExpr l t d
+  = foldr go (ECon (dataConId d) xs l) (tvs ++ xs)
+  where
+    tvs     = [ EVar [x] dummyAnnot | x <- take (length αs) ['A'..] ]
+    xs      = [ EVar [x] dummyAnnot | x <- take ar ['a'..] ]
+    ar      = length bs
+    (αs, t) = T.splitForAllTys (dataConUserType d)
+    (bs, _) = T.splitPiTys t
+    go x e = ELam (varId x) e dummyAnnot
 
 apConEff :: EffExpr b a -> EffExpr b a -> EffExpr b a
 apConEff (ECon d args l) a = ECon d (args ++ [a]) l
@@ -568,4 +581,3 @@ wordsToSpecTable wds
       Right t  -> t
 
 data BriskAnnot = AnnotModule
-

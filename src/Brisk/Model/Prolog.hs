@@ -17,6 +17,9 @@ import           Brisk.Model.GhcInterface
 import           Brisk.Pretty
 import           Brisk.UX
 import qualified GhcPlugins as GT
+import           Text.Show.Pretty
+
+import Debug.Trace       
 
 ---------------------------------------------------
 toBriskString :: (Show a, HasType a, T.Annot a) => T.EffExpr T.Id a -> String
@@ -167,9 +170,9 @@ fromIceTExpr pid (T.EField e i _)
   = mkField (prolog pid) [fromIceTExpr pid e, prolog i]
 fromIceTExpr pid (T.ESymElt e _)
   = compoundTerm "nonDet" [prolog pid, fromIceTExpr pid e]
-fromIceTExpr pid (T.EApp e1 e2 l)
+fromIceTExpr pid e@(T.EApp e1 e2 l)
   | Just t <- getType l
-  = fromIceTExpr pid (T.EAny (T.EType t l) l)
+  = fromIceTExpr pid $ T.EAny (T.EType t l) l
 fromIceTExpr pid e
   = abort "fromIceTExpr" e
 

@@ -13,12 +13,14 @@ import Control.Monad
 import Brisk.Model.GhcInterface
 import Brisk.Model.Types
 import Brisk.UX
+import Brisk.Pretty
+import Text.PrettyPrint.HughesPJ
 import Unique
 import Data.Maybe
 import OccName
 import CoreSyn
 import ConLike
-import GhcPlugins hiding (Id, idType)
+import GhcPlugins hiding (Id, idType, (<+>))
 import TcRnMonad
 import DynamicLoading
 import IfaceEnv
@@ -30,6 +32,7 @@ import Data.Word
 import GHC.Word
 import LoadIface (loadInterfaceForModule)
 import GHC (HValue)
+import Text.Show.Pretty (ppShow)
 
 -- type Ann         = (Maybe Type, SrcSpan)
 -- type EffExprBare = EffExpr Id Ann
@@ -54,12 +57,12 @@ retrieveAllSpecs env mg
 retrieveSpecs :: MonadIO m => HscEnv -> Module -> m SpecTableIn
 retrieveSpecs env mod
   = do origNm <- liftIO . initTcForLookup env $ do
-         loadInterfaceForModule (text "retrieveSpecs") mod
+         loadInterfaceForModule (GhcPlugins.text "retrieveSpecs") mod
          lookupOrig mod tabOccName
        liftIO $ do
          linkModule env mod
-         hv <- getHValue env origNm >>= wormhole unsafeGlobalDynFlags
-         v  <- lessUnsafeCoerce unsafeGlobalDynFlags "retrieveSpecs" hv
+         hv <- getHValue env origNm >>= wormhole (hsc_dflags env)
+         v  <- lessUnsafeCoerce (hsc_dflags env) "retrieveSpecs" hv
          return (wordsToSpecTable v)
        -- Is the above even safe ^^^^ ????
        -- Can this safely be deleted (???):
@@ -79,9 +82,14 @@ tyFromName env nm
 embedSpecTable :: Module -> [Name] -> SpecTableOut -> CoreM CoreBind
 embedSpecTable mod names tab@(SpecTable entries)
   = do t      <- tabName mod
+
+       -- liftIO $ forM_ [ (k,v) | k :<=: v <- entries'' ] $ \(k,v) ->
+       --   putStrLn (render (pp k <+> Brisk.Pretty.text " (output: )" <+> pp v))
+
        encoded <- mkStringExpr str
        return $ NonRec (mkExportedLocalId VanillaId t ty) encoded
          where
+           SpecTable entries'' = wordsToSpecTable str
            entries' = [ x :<=: fmap fst t | x :<=: t <- entries, x `elem` ids ]
            ids      = nameId <$> names
            str      = specTableToWords (SpecTable entries')

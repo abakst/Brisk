@@ -9,7 +9,7 @@ import Unique
 import StaticFlags
 import GHC (parseStaticFlags)
 import GHC.CString (unpackCString#)
-import GhcPlugins hiding (Id)
+import GhcPlugins hiding (Id, (<+>))
 import System.FilePath.Find
 import Paths_brisk
 import Brisk.Model.Extract
@@ -33,6 +33,8 @@ import Annotations
 import Avail
 import Panic
 import Brisk.Pretty
+import Text.Show.Pretty hiding (Name)
+import Text.PrettyPrint.HughesPJ
 import Brisk.Model.GhcInterface
 import Brisk.Model.EmbedCore
 import Brisk.Model.Types
@@ -67,14 +69,18 @@ runBrisk bs mg binds
        annEnv       <- loadBriskAnns hsenv mg
        specMods     <- specModules hsenv mg annEnv
        let go (SpecTable entries) mod =
-
              do (SpecTable entries') <- retrieveSpecs hsenv mod
                 return (SpecTable (entries ++ entries'))
        specs0       <- retrieveAllSpecs hsenv mg
        let specTab0 = SpecTable (concat [ es | SpecTable es <- specs0 ])
        specs <- foldM go specTab0 specMods
+       liftIO $ putStrLn (ppShow specTab0)
+       liftIO $ putStrLn (ppShow specs)
        spec_tab <- liftIO . withExceptions $ do
          runMGen bs hsenv mg specs (deShadowBinds binds)
+
+       liftIO (putStrLn "OUTPUT")
+       
        case spec_tab of
          Just tab -> do
            --  This one implements "Assume" specs
