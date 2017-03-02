@@ -188,16 +188,17 @@ mGenExpr' g v@(Var x)
   = do pure <- isPure (idType x)
        s    <- currentSpan
 
-{-       when pure $ liftIO $ do
+       {-
+       when pure $ liftIO $ do
          let t = defaultEffExpr (Nothing, s) (idType x)
          putStrLn ("pure " ++ showSDoc unsafeGlobalDynFlags (ppr v))
          putStrLn ("ghc ty: " ++ showSDoc unsafeGlobalDynFlags (ppr (idType x)))
-         putStrLn ("ty: " ++ render (pp t)) -}
+         putStrLn ("ty: " ++ render (pp t))
+       -}
 
-       if pure then
-          return $ defaultEffExpr (Nothing, s) (idType x)
-       else
-          return $ var (bindId x) (annotOfBind x)
+       return $ if pure 
+                then defaultEffExpr (Nothing, s) (idType x)
+                else var (bindId x) (annotOfBind x)
 
 mGenExpr' g (Let b e)
   = do g' <- mGenBind g b
