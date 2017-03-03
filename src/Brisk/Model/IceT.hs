@@ -9,6 +9,7 @@ import           Name
 import           Type
 import           Control.Monad.Trans.State
 import           Data.List
+import           Data.Char (toUpper)
 import           Data.Maybe
 import           Brisk.Pretty
 import           Brisk.Model.GhcInterface
@@ -159,11 +160,11 @@ simplifySkips (Seq ss) = Seq ss'
 runIceT :: (Show a, HasType a, E.Annot a) => IceTExpr a -> [IceTProcess a]
 runIceT e
   =   anormalizeProc
-   .  mapProcStmt (substStmt "A" aPid)
-  <$> (Single "A" stmt : par st)
+   .  mapProcStmt (substStmt "a" aPid)
+  <$> (Single "a" stmt : par st)
   where
-    aPid            = E.EVal (Just (E.CPid "A")) E.dummyAnnot
-    ((stmt, _), st) = runState (fromTopEffExp e) (IS 'A' 'B' [] [] [] [])
+    aPid            = E.EVal (Just (E.CPid "a")) E.dummyAnnot
+    ((stmt, _), st) = runState (fromTopEffExp e) (IS 'a' 'b' [] [] [] [])
 
 mapProcStmt :: (IceTStmt a -> IceTStmt a) -> IceTProcess a -> IceTProcess a
 mapProcStmt f (Single p s)      = Single p (f s)
@@ -449,9 +450,9 @@ fromSymSpawn l s xs p x
   = do me     <- gets current
        them   <- newPidM
        let themSet = them : "_Set"
-       withCurrentM them $ do
-         (pSpawn, _) <- fromEffExp s p x
-         addProcessM (ParIter [them] themSet pSpawn)
+       withCurrentM (toUpper them) $ do
+         (pSpawn, _) <- fromEffExp s p Nothing
+         addProcessM (ParIter [toUpper them] themSet pSpawn)
          return (Skip, Just (E.EVal (Just (E.CPidSet themSet)) l))
 
 newPidM = do who <- gets next

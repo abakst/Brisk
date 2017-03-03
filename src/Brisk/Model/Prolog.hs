@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeSynonymInstances #-}
@@ -5,7 +6,7 @@ module Brisk.Model.Prolog where
 
 import           Name
 import           OccName
-import           Text.PrettyPrint.HughesPJ
+import           Text.PrettyPrint.HughesPJ hiding (empty)
 import           Control.Exception
 import           Data.Char
 import           Data.List
@@ -18,8 +19,63 @@ import           Brisk.Pretty
 import           Brisk.UX
 import qualified GhcPlugins as GT
 import           Text.Show.Pretty
+import           Paths_brisk 
+import           Text.Printf
+import           Turtle hiding (printf, text, (<>), space)
+import           Turtle.Format hiding (printf)
 
 import Debug.Trace       
+
+--------------------------------------------------
+runRewriter :: (HasType l, T.Annot l, Show l)
+            => T.EffExpr Id l -> Maybe String -> IO ()
+--------------------------------------------------
+runRewriter e mdest
+  = do rw <- getDataFileName "rewrite.pl"
+       sh $ do
+         tmp  <- using (mktempfile "." "brisk_query")
+         let query   = template tmp
+             rwquery = queryTemplate (fromString (toBriskString e)) "skip"
+             cmd     = format ( "sicstus -l " % s
+                              % " --goal "    % w
+                              % " --noinfo --nologo"
+                              ) (fromString rw) query
+         output tmp (select $ textToLines rwquery)
+         status <- shell cmd empty
+         reportStatus status
+         exit status
+
+reportStatus = echo . statusMsg
+
+notSND = 3               
+notDLFree = 4
+
+statusMsg :: ExitCode -> Line
+statusMsg ExitSuccess
+  = "\x1b[1;32mOK\x1b[0m"
+statusMsg (ExitFailure c)
+  | c == notSND
+  = "\x1b[1;31mUNSAFE: Not SND\x1b[0m"
+  | c == notDLFree
+  = "\x1b[1;31mUNSAFE: Possible Deadlock\x1b[0m"
+  | otherwise
+  = "\x1b[1;31mERROR: Unexpected Status!\x1b[0m"
+
+queryTemplate t r
+  = format("rewrite_query(T,Rem) :- Rem="%s%",\nT="%s%".") r t
+
+-- template :: String -> String -> String -> String
+template tmp
+  = format ( "consult('"%fp%"'),"
+           % "rewrite_query(T,R),"
+           % s
+           % "halt(0)."
+           ) tmp check
+  where
+    check = format ("("%s%", ("%s%"; halt("%d%")) ; halt("%d%")),") rf rw notDLFree notSND
+    rf = format ("catch(check_race_freedom(T,T1),_,halt("%d%"))") notSND
+    rw = format ("catch(rewrite(T1,R,[],_,_,_),_,halt("%d%"))") notDLFree
+    
 
 ---------------------------------------------------
 toBriskString :: (Show a, HasType a, T.Annot a) => T.EffExpr T.Id a -> String
@@ -82,11 +138,12 @@ fromIceTStmt pid Skip
   = mkSkip
 
 fromIceTStmt pid (Recv ty w my)
-  = mkRecv (prolog pid) (wc ++ [mkType [prolog ty], y])
+  = mkRecv (prolog pid) (wc ++ [t, y])
   where
-    wc = maybe [] (return . fromIceTExpr pid) w
+    wc = maybe [] (return . fromIceTPid pid) w
+    t  = maybe (mkType [prolog ty]) (const (prolog ty)) w
     y = case my of
-          Nothing -> prolog "_"
+          Nothing -> prolog ("dev_null__" :: String)
           Just y  -> prolog y
 
 fromIceTStmt pid (Assgn x _ e)
@@ -98,12 +155,14 @@ fromIceTStmt pid (Case e cases d)
     pCases
       = goCase <$> cases
     goCase ((T.ECon c xs l), s)
-      = mkCase ppid (fromIceTExpr pid e') (fromIceTStmt pid s')
+      = mkCase ppid (fromIceTExpr pid e') (fromIceTStmt pid sAssigns)
       where
-        s'  = foldl' (\s (x,x') -> substStmt x x' s) s (zip bs xs')
+        sAssigns = seqStmts (assigns ++ [s])
+        assigns = [ Assgn x Nothing x' | (x,x') <- zip bs xs' ]
+        -- s'  = foldl' (\s (x,x') -> substStmt x x' s) s (zip bs xs')
         e'  = T.ECon c xs' l
         bs  = T.varId <$> xs
-        xs' = [ T.EVar (toUpper v0:v) l | (v0:v) <- bs ]
+        xs' = [ T.EVar (liftCase v) l | v <- bs ]
     defaultCase
       = (mkDefault ppid . fromIceTStmt pid) <$> d
     ppid = prolog pid
@@ -115,16 +174,22 @@ fromIceTStmt pid Continue
   = mkContinue
 
 fromIceTStmt pid (ForEach x xs s)
-  = mkForEach (prolog pid) [ prolog x
+  = mkForEach (prolog pid) [ prolog (liftCase x)
                            , fromIceTPidSet pid xs
-                           , fromIceTStmt pid s
+                           , fromIceTStmt pid s'
                            ]
+    where
+      s' = seqStmts [ Assgn x Nothing (T.EVar (liftCase x) T.dummyAnnot)
+                    , s
+                    ]
 
 fromIceTStmt pid Fail
   = mkFail (prolog pid)
 
+fromIceTPid pid (T.EVal (Just (T.CPid p)) _)
+  = compoundTerm "e_pid" [prolog p]
 fromIceTPid pid (T.EVar v l)
-  = prologPid v
+  = compoundTerm "e_var" [prolog v]
 fromIceTPid pid (T.ESymElt e l)
   = fromIceTPidSet pid e
 fromIceTPid pid e
@@ -146,7 +211,7 @@ fromIceTExpr _ (T.EVal (Just (T.CPid p)) _)
 fromIceTExpr _ (T.EVal (Just (T.CPidSet ps)) _)
   = prolog ps
 fromIceTExpr _ (T.EAny t l)
-  = prolog "ndet"
+  = prolog ("ndet" :: String)
 fromIceTExpr _ (T.EVar v l)
   = prolog v
 fromIceTExpr _ (T.EType t _)
@@ -177,7 +242,7 @@ fromIceTExpr pid e
   = abort "fromIceTExpr" e
 
 mkPidSet s  
-  = compoundTerm "set" [prolog s]
+  = prolog s -- compoundTerm "set" [prolog s]
 
 mkFail :: Doc -> Doc
 mkFail p = compoundTerm "die" [p]
@@ -207,10 +272,10 @@ mkRecv :: Doc -> [Doc] -> Doc
 mkRecv = mkAction "recv" 2
 
 mkSkip :: Doc
-mkSkip = prolog "skip"
+mkSkip = prolog ("skip" :: String)
 
 mkContinue :: Doc
-mkContinue = prolog "continue"
+mkContinue = prolog ("continue" :: String)
 
 mkWhile :: Doc -> [Doc] -> Doc  
 mkWhile = mkAction "while" 1
@@ -220,9 +285,9 @@ mkForEach = mkAction "for" 3
 
 mkCases :: Doc -> Doc -> [Doc] -> Maybe Doc -> Doc
 mkCases pid x cases d
-  = compoundTerm "cases" ([pid, x, listTerms cases] ++ d')
+  = compoundTerm "cases" ([pid, x, listTerms cases, d'])
   where
-    d' = maybe [] return d
+    d' = fromMaybe mkSkip d
 
 mkCase :: Doc -> Doc -> Doc -> Doc
 mkCase pid e s = compoundTerm "case" [pid, e, s]
@@ -270,6 +335,7 @@ instance Prolog String where
          . last
          . textNoDots
     where
+      repl '#'  = "_mh_"
       repl '\'' = "_"
       repl '.'  = "__"
       repl c    = [c]
@@ -311,3 +377,7 @@ instance Prolog b => Prolog (T.Type b) where
     = compoundTerm "tyCon" [text "ty__" <> prolog t]
   prolog (T.TyConApp t ts)
     = compoundTerm "tyCon" ((text "ty__" <> prolog t) : fmap prolog ts)
+
+liftCase :: String -> String
+liftCase []     = []
+liftCase (x:xs) = toUpper x : xs

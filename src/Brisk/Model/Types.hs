@@ -569,7 +569,7 @@ instance Annot AnnIn where
 
 lookupTable :: Id -> SpecTable a -> Maybe (EffExpr Id a)
 lookupTable b (SpecTable es)
-  = listToMaybe [ t | x :<=: t <- es ]
+  = listToMaybe [ t | x :<=: t <- es, x == b ]
 
 specTableToWords :: SpecTableIn -> String
 specTableToWords = B8String.decode . B.unpack . encode
