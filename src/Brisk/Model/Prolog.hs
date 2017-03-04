@@ -41,6 +41,8 @@ runRewriter e mdest
                               % " --noinfo --nologo"
                               ) (fromString rw) query
          output tmp (select $ textToLines rwquery)
+         l <- select $ textToLines cmd
+         echo l
          status <- shell cmd empty
          reportStatus status
          exit status
@@ -76,7 +78,17 @@ template tmp
     rf = format ("catch(check_race_freedom(T,T1),_,halt("%d%"))") notSND
     rw = format ("catch(rewrite(T1,R,[],_,_,_),_,halt("%d%"))") notDLFree
     
+data BriskAnnot a = BriskAnnot { isPatternVar :: Bool
+                               , annot        :: a
+                               }
+                  deriving Show
 
+instance (Show a, T.Annot a) => T.Annot (BriskAnnot a) where
+  dummyAnnot = BriskAnnot False T.dummyAnnot
+instance (Show a, HasType a) => HasType (BriskAnnot a) where
+  getType     = getType . annot
+  setType t a = a { annot = setType t (annot a) }
+         
 ---------------------------------------------------
 toBriskString :: (Show a, HasType a, T.Annot a) => T.EffExpr T.Id a -> String
 ---------------------------------------------------
@@ -85,16 +97,18 @@ toBriskString = render . toBrisk
 ---------------------------------------------------
 toBrisk :: (Show a, HasType a, T.Annot a) => T.EffExpr T.Id a -> Doc
 ---------------------------------------------------
-toBrisk e = fromIceT (runIceT e)
+toBrisk e = fromIceT (runIceT (fmap toBriskAnnot e))
+  where
+    toBriskAnnot a = BriskAnnot False a
 
 ---------------------------------------------------
-fromIceT :: (Show a, HasType a, T.Annot a) => [IceTProcess a] -> Doc
+fromIceT :: (Show a, HasType a, T.Annot a) => [IceTProcess (BriskAnnot a)] -> Doc
 ---------------------------------------------------
 fromIceT ps
   = mkPar (fromIceTProcess <$> ps)
 
 ---------------------------------------------------
-fromIceTProcess :: (Show a, HasType a, T.Annot a) => IceTProcess a -> Doc
+fromIceTProcess :: (Show a, HasType a, T.Annot a) => IceTProcess (BriskAnnot a) -> Doc
 ---------------------------------------------------
 fromIceTProcess (Single pid stmt)
   = fromIceTStmt pid (pullCaseAssignStmt stmt)
@@ -122,7 +136,7 @@ pullCaseAssignStmt s
   = s
 
 ---------------------------------------------------
-fromIceTStmt :: (Show a, HasType a, T.Annot a) => ProcessId -> IceTStmt a -> Doc
+fromIceTStmt :: (Show a, HasType a, T.Annot a) => ProcessId -> IceTStmt (BriskAnnot a) -> Doc
 ---------------------------------------------------
 fromIceTStmt pid s@(Seq _)
   = mkSeq (fromIceTStmt pid <$> ss)
@@ -143,8 +157,9 @@ fromIceTStmt pid (Recv ty w my)
     wc = maybe [] (return . fromIceTPid pid) w
     t  = maybe (mkType [prolog ty]) (const (prolog ty)) w
     y = case my of
-          Nothing -> prolog ("dev_null__" :: String)
-          Just y  -> prolog y
+          Nothing  -> prolog ("dev_null__" :: String)
+          Just "_" -> prolog ("dev_null__" :: String)
+          Just y   -> prolog y
 
 fromIceTStmt pid (Assgn x _ e)
   = mkAssign (prolog pid) [prolog x, fromIceTExpr pid e]
@@ -155,14 +170,12 @@ fromIceTStmt pid (Case e cases d)
     pCases
       = goCase <$> cases
     goCase ((T.ECon c xs l), s)
-      = mkCase ppid (fromIceTExpr pid e') (fromIceTStmt pid sAssigns)
+      = mkCase ppid (fromIceTExpr pid e') (fromIceTStmt pid s')
       where
-        sAssigns = seqStmts (assigns ++ [s])
-        assigns = [ Assgn x Nothing x' | (x,x') <- zip bs xs' ]
-        -- s'  = foldl' (\s (x,x') -> substStmt x x' s) s (zip bs xs')
+        s'  = foldl' (\s (x,x') -> substStmt x x' s) s (zip bs xs')
         e'  = T.ECon c xs' l
         bs  = T.varId <$> xs
-        xs' = [ T.EVar (liftCase v) l | v <- bs ]
+        xs' = [ T.EVar (liftCase v) l { isPatternVar = True } | v <- bs ]
     defaultCase
       = (mkDefault ppid . fromIceTStmt pid) <$> d
     ppid = prolog pid
@@ -173,15 +186,17 @@ fromIceTStmt pid (While s)
 fromIceTStmt pid Continue
   = mkContinue
 
-fromIceTStmt pid (ForEach x xs s)
+fromIceTStmt pid (ForEach x (True, xs) s)
   = mkForEach (prolog pid) [ prolog (liftCase x)
                            , fromIceTPidSet pid xs
                            , fromIceTStmt pid s'
                            ]
     where
-      s' = seqStmts [ Assgn x Nothing (T.EVar (liftCase x) T.dummyAnnot)
+      s' = seqStmts [ Assgn x Nothing (T.EVar (liftCase x) T.dummyAnnot { isPatternVar = True })
                     , s
                     ]
+fromIceTStmt pid (ForEach x (False, xs) s)
+  = mkIter (prolog pid) [ fromIceTExpr pid xs, fromIceTStmt pid s ]
 
 fromIceTStmt pid Fail
   = mkFail (prolog pid)
@@ -189,6 +204,9 @@ fromIceTStmt pid Fail
 fromIceTPid pid (T.EVal (Just (T.CPid p)) _)
   = compoundTerm "e_pid" [prolog p]
 fromIceTPid pid (T.EVar v l)
+  | isPatternVar l
+  = compoundTerm "e_pid" [prolog (liftCase v)]
+  | otherwise
   = compoundTerm "e_var" [prolog v]
 fromIceTPid pid (T.ESymElt e l)
   = fromIceTPidSet pid e
@@ -202,7 +220,7 @@ fromIceTPidSet pid e
 
 ---------------------------------------------------
 fromIceTExpr :: (Show a, HasType a)
-             => ProcessId -> IceTExpr a -> Doc
+             => ProcessId -> IceTExpr (BriskAnnot a) -> Doc
 ---------------------------------------------------
 fromIceTExpr _ (T.EVal (Just (T.CInt i)) _)
   = prolog i
@@ -282,6 +300,9 @@ mkWhile = mkAction "while" 1
 
 mkForEach :: Doc -> [Doc] -> Doc
 mkForEach = mkAction "for" 3
+
+mkIter :: Doc -> [Doc] -> Doc
+mkIter = mkAction "iter" 2
 
 mkCases :: Doc -> Doc -> [Doc] -> Maybe Doc -> Doc
 mkCases pid x cases d

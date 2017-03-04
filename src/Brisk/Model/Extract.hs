@@ -23,7 +23,7 @@ import qualified Brisk.Model.Env as Env
 import           Brisk.Model.GhcInterface
 import           Brisk.Model.Types
 import           Brisk.Model.Builtins
-import           Brisk.Model.Prolog
+import           Brisk.Model.Prolog hiding (BriskAnnot(..))
 -- import           Brisk.Model.Promela
 import           Brisk.Model.IceT (runIceT, HasType(..))
 import           Brisk.Pretty

@@ -15,7 +15,7 @@ category:            Concurrency
 build-type:          Simple
 -- extra-source-files:
 cabal-version:       >=1.10
-data-dir:          rewrite
+data-dir:          rewrite/src
 data-files:        rewrite.pl, lib/misc.pl, tags.pl
 
 library

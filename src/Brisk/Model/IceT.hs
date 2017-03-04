@@ -27,7 +27,7 @@ data IceTStmt_ b a = Send IceTType (E.EffExpr b a) (E.EffExpr b a)
                    | Assgn b (Maybe IceTType) (E.EffExpr b a)
                    | Seq [IceTStmt_ b a]
                    | Case (E.EffExpr b a) [(E.EffExpr b a, IceTStmt_ b a)] (Maybe (IceTStmt_ b a))
-                   | ForEach E.Id (E.EffExpr b a) (IceTStmt_ b a)
+                   | ForEach E.Id (Bool, E.EffExpr b a) (IceTStmt_ b a) 
                    | NonDet IceTType
                    | While (IceTStmt_ b a)
                    | Fail
@@ -77,7 +77,7 @@ substStmt x e = go
     go (Assgn x t e)   = Assgn x t (sub e)
     go (Seq ss)        = Seq (go <$> ss)
     go (Case e alts d) = Case (sub e) (fmap go <$> alts) (go <$> d)
-    go (ForEach x e s) = ForEach x (sub e) (go s)
+    go (ForEach x (b, e) s) = ForEach x (b, sub e) (go s)
     go (While s)       = While (go s)
     go (Recv t w mx)   = Recv t (sub <$> w) mx
     go s               = s
@@ -236,12 +236,14 @@ fromEffExp s (E.EPrRec acc x body acc0 xs l) mx
   = do (stmt, _) <- fromEffExp s' body (Just acc)
        exs       <- fromPure s xs
        a0        <- fromPure s acc0
-       return (foreach stmt exs a0, Nothing)
+       return (foreach stmt (isPidSet exs, exs) a0, Nothing)
   where
     s'               = addsStore l s [acc, x]
     foreach s exs a0 = seqStmts [ Assgn acc (getType a0) a0
                                 , ForEach x exs s
                                 ]
+    isPidSet e = getType e
+              == Just (E.TyConApp "Control.Distributed.Process.SymmetricProcess.SymProcessSet" []) -- Ugh
 
 fromEffExp s (E.EPrimOp E.Self [] l) _
   = do me <- gets current
@@ -634,8 +636,12 @@ instance Pretty (IceTStmt a) where
       ppDflt Nothing  = empty
       ppDflt (Just s) = text "__DEFAULT__:" $$ nest 2 (ppPrec 0 s)
 
-  ppPrec _ (ForEach x e s)
+  ppPrec _ (ForEach x (True, e) s)
     = text "for" <+> pp x <+> text "in" <+> pp e <> colon $$
+      nest 2 (ppPrec 0 s)
+
+  ppPrec _ (ForEach x (False, e) s)
+    = text "iter" <+> pp x <+> text "in" <+> pp e <> colon $$
       nest 2 (ppPrec 0 s)
 
   ppPrec _ (While s)
