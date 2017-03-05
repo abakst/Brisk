@@ -101,7 +101,6 @@ runMGen bs hsenv mg specs@(SpecTable speccies) prog
        dumpBinds brisk
        forM_ brisk (putStrLn . render . PP.vcat . fmap pp . runIceT . snd)
        forM_ brisk (putStrLn . toBriskString . snd)
-       -- forM_ brisk (runRewriter . snd)
        return $ SpecTable [ x :<=: e | (x,e) <- all ]
   where
     go :: EffMap -> CoreProgram -> MGen EffMap

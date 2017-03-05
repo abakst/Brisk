@@ -455,7 +455,8 @@ fromSymSpawn l s xs p x
        withCurrentM (toUpper them) $ do
          (pSpawn, _) <- fromEffExp s p Nothing
          addProcessM (ParIter [toUpper them] themSet pSpawn)
-         return (Skip, Just (E.EVal (Just (E.CPidSet themSet)) l))
+         let l' = setType (Just $ E.TyConApp "Control.Distributed.Process.SymmetricProcess.SymProcessSet" []) l
+         return (Skip, Just (E.EVal (Just (E.CPidSet themSet)) l'))
 
 newPidM = do who <- gets next
              modify $ \s -> s { next = succ who }

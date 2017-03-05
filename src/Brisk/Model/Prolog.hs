@@ -41,8 +41,8 @@ runRewriter e mdest
                               % " --noinfo --nologo"
                               ) (fromString rw) query
          output tmp (select $ textToLines rwquery)
-         l <- select $ textToLines cmd
-         echo l
+         -- l <- select $ textToLines cmd
+         -- echo l
          status <- shell cmd empty
          reportStatus status
          exit status
