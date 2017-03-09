@@ -100,7 +100,7 @@ runMGen bs hsenv mg specs@(SpecTable speccies) prog
        -- dumpBinds all
        dumpBinds brisk
        forM_ brisk (putStrLn . render . PP.vcat . fmap pp . runIceT . snd)
-       forM_ brisk (putStrLn . toBriskString . snd)
+       -- forM_ brisk (putStrLn . toBriskString . snd)
        return $ SpecTable [ x :<=: e | (x,e) <- all ]
   where
     go :: EffMap -> CoreProgram -> MGen EffMap
@@ -199,7 +199,12 @@ mGenExpr' g v@(Var x)
        return $ if pure 
                 then defaultEffExpr (Nothing, s) (idType x)
                 else var (bindId x) (annotOfBind x)
-
+mGenExpr' g exp@(Let bnd@(NonRec b e) e')
+  = do a <- mGenExpr g e
+       let x = bindId b
+       a' <- mGenExpr (Env.insert g x (var x $ annotOfBind b)) e'
+       s  <- currentSpan
+       return $ ELet x a a' (Just (exprEType exp), s)
 mGenExpr' g (Let b e)
   = do g' <- mGenBind g b
        mGenExpr g' e

@@ -29,11 +29,12 @@ failWiredIn :: EffExpr Id ()
 failWiredIn
   = "A" $->$ "e" $->$ (EPrimOp Fail [] ())
 
-monadBuiltin =  [ (bindMName, bindWiredIn)
-                , (thenMName, thenWiredIn)
-                , (failMName, failWiredIn)
-                , (returnMName, returnWiredIn)
+monadBuiltin =  [ (nameId bindMName, bindWiredIn)
+                , (nameId thenMName, thenWiredIn)
+                , (nameId failMName, failWiredIn)
+                , (nameId returnMName, returnWiredIn)
                 ]   
+
 pidType :: Type Id
 pidType = TyConApp "Control.Distributed.Process.Internal.Types.ProcessId" []
 
@@ -203,4 +204,4 @@ isMonadOp
 
 monadOp :: NamedThing a => a -> Maybe (EffExpr Id ())  
 monadOp f
-  = lookup (getName f) monadBuiltin
+  = lookup (nameId $ getName f) monadBuiltin

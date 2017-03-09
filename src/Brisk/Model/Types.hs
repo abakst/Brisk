@@ -90,7 +90,6 @@ data EffExpr b a =
  | EVar    { varId :: b, annot :: a }                          -- ^ x
  | ECon    { conId :: b, conArgs :: [EffExpr b a], annot :: a }
  | EAny    { anyTy  :: EffType b a, annot :: a }
- | EField  { fieldExp :: EffExpr b a, fieldNo :: Int, annot :: a }
  | ELam    { lamId :: b, lamBody :: EffExpr b a, annot :: a }            -- ^ \x -> e
  | EApp    { appFun :: EffExpr b a, appArg :: EffExpr b a, annot :: a }
  | EPrRec  { precAcc  :: b
@@ -107,6 +106,7 @@ data EffExpr b a =
            , caseDft :: (Maybe (EffExpr b a))
            , annot :: a
            }
+ | ELet    { letId :: b, letExpr :: EffExpr b a, letBody :: EffExpr b a, annot :: a }
  | EType   { typeTy :: Type b, annot :: a }
  -- Processes
  | EPrimOp { primOp   :: PrimOp
@@ -183,6 +183,7 @@ txExprIds f g
     go (ESymElt e l)            = ESymElt (go e) l
     go (ECon c es l)            = ECon c (go <$> es) l
     go (ELam b m l)             = ELam b (go m) l
+    go (ELet b m n l)           = ELet b (go m) (go n) l
     go (EApp m n l)             = EApp (go m) (go n) l
     go (EPrRec a x m b e l)     = EPrRec a x (go m) (go b) (go e) l
     go (ERec x e l)             = ERec x (go e) l
@@ -220,25 +221,15 @@ substs froms tos e
 
 simplify :: (Show a, Show b, Subst b (EffExpr b a))
          => EffExpr b a -> EffExpr b a
+simplify (ECase t e [(c,[],a)] Nothing l)
+  = a
 simplify (ECase t e alts md l)
   = fromMaybe defCase $ simplifyCasesMaybe e' alts'
-  -- = case (e', alts') of
-  --     (ECon c xs _, [(c', xs', eAlt)])
-  --       | c == c' && length xs == length xs'
-  --         -> substs xs' xs eAlt
-  --     _   -> ECase t e' alts' md' l
   where
     defCase = ECase t e' alts' md' l
     e'      = simplify e
     alts'   = map (\(x,y,z) -> (x,y,simplify z)) alts
     md'     = simplify <$> md
-    
-simplify (EField e i l')
-  = case e' of
-      ECon _ as _ -> as !! i
-      _           -> EField e' i l'
-  where
-    e' = simplify e
 simplify (ERec f e l)
   = ERec f (simplify e) l
 simplify (EPrRec x y e b xs l)
@@ -254,6 +245,7 @@ simplify (EApp e1 e2 l)
 simplify (EPrimOp op args l) = EPrimOp op (simplify <$> args) l
 simplify (ECon c xs l)   = ECon c (simplify <$> xs) l
 simplify (ELam b e l)    = ELam b (simplify e) l
+simplify (ELet x e1 e2 l)= ELet x (simplify e1) (simplify e2) l
 simplify t@EType{}       = t
 simplify x@EVar{}        = x
 simplify v@EVal{}        = v
@@ -348,10 +340,6 @@ instance (Pretty b, Eq b) => Pretty (EffExpr b a) where
   ppPrec _ (EAny t _)  = braces (pp t)
   ppPrec _ (EVal mv _) = maybe (text "⊥") pp mv
   ppPrec _ (ESymElt set _) = braces (text "_ ∈" <+> pp set)
-  -- ppPrec _ (EVal (v,t,p) _)
-  --   = braces (pp p)
-  ppPrec _ (EField e i _)
-    = pp e <> brackets (int i)
   ppPrec _ (ECon c [] _)
     = pp c
   ppPrec _ (ECon c as _)
@@ -362,6 +350,9 @@ instance (Pretty b, Eq b) => Pretty (EffExpr b a) where
     = parensIf (z > 4) (ppCases e es d)
   ppPrec z (EApp e1 e2 _)
     = parensIf (z > 8) (ppPrec 8 e1 <+> ppPrec 9 e2)
+  ppPrec z f@(ELet x e1 e2 _)
+    = text "let" <+> pp x <+> equals <+> ppPrec 0 e1 $$
+      text "in"  <+> ppPrec 0 e2
   ppPrec z f@(ELam _ _ _)
     -- = parensIf (z > 7) (text "\\" <> spaces xs <+> text "->" $$ nest 2 (ppPrec 7 e))
     = parens (text "\\" <> spaces xs <+> text "->" $$ nest 2 (ppPrec 7 e))
@@ -476,8 +467,6 @@ substExpr b x a = go
                       | otherwise    -> v
       go v@(ECon c as l)
         = ECon c (go <$> as) l
-      go v@(EField e i l)
-        = EField (go e) i l
       go g@(EPrRec a b f eb e0 l)
         | x == a || x == b = g
         | otherwise = EPrRec a' b' (go f') (go eb) (go e0) l
@@ -491,6 +480,11 @@ substExpr b x a = go
       go f@(ELam x' e l)
         | x == x'   = f
         | otherwise = ELam x'' (go (substExpr True x' (EVar x'' dummyAnnot) e)) l
+        where
+          x'' = avoid (fv a) x'
+      go e@(ELet x' e1 e2 l)
+        | x == x' = e
+        | otherwise = ELet x'' (go e1) (go (substExpr True x' (EVar x'' dummyAnnot) e2)) l
         where
           x'' = avoid (fv a) x'
       go (ECase t e es d l)
@@ -510,10 +504,10 @@ fvExpr (ESymElt s _)   = fv s
 fvExpr (EVal _ _)      = Set.empty
 fvExpr (EVar x _)      = Set.singleton x
 fvExpr (ECon x as _)   = Set.unions (fv <$> as)
-fvExpr (EField e i _)  = fvExpr e
 fvExpr (ERec f e _)    = fv e Set.\\ Set.singleton f
 fvExpr (EPrRec x y f b e _) = Set.unions (fv <$> [f,b,e]) Set.\\ Set.fromList [x,y]
 fvExpr (ELam x e _)    = fv e Set.\\ Set.singleton x
+fvExpr (ELet x e1 e2 _)  = Set.unions [fv e1, fv e2 Set.\\ Set.singleton x]
 fvExpr (ECase t e es d l)= Set.unions ([fv e] ++ fvDefault d ++ fmap fvAlts es)
   where
     fvDefault Nothing   = []

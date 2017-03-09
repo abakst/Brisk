@@ -35,14 +35,15 @@ runRewriter e mdest
        sh $ do
          tmp  <- using (mktempfile "." "brisk_query")
          let query   = template tmp
-             rwquery = queryTemplate (fromString (toBriskString e)) "skip"
+             (inp,rem) = toBrisk e
+             rwquery   = queryTemplate (fromString (render inp)) (fromString (render rem))
              cmd     = format ( "sicstus -l " % s
                               % " --goal "    % w
                               % " --noinfo --nologo"
                               ) (fromString rw) query
          output tmp (select $ textToLines rwquery)
-         -- l <- select $ textToLines cmd
-         -- echo l
+         l <- select $ textToLines cmd
+         echo l
          status <- shell cmd empty
          reportStatus status
          exit status
@@ -90,30 +91,67 @@ instance (Show a, HasType a) => HasType (BriskAnnot a) where
   setType t a = a { annot = setType t (annot a) }
          
 ---------------------------------------------------
-toBriskString :: (Show a, HasType a, T.Annot a) => T.EffExpr T.Id a -> String
+findForever :: (Show a, HasType a, T.Annot a)
+            => IceTStmt a -> Maybe (IceTStmt a)
 ---------------------------------------------------
-toBriskString = render . toBrisk                 
+findForever st@(While l s)
+  | alwaysContinues l s
+  = Just st
+  | otherwise
+  = Nothing
+findForever (Seq ss)
+  = findForever (last ss)
+findForever _
+  = Nothing
+
+alwaysContinues l (Continue l')
+  = l == l'
+alwaysContinues l (Seq ss)
+  = let s' = last ss in alwaysContinues l s'
+alwaysContinues l (Case _ alts d)
+  = all (alwaysContinues l) ((snd <$> alts) ++ maybe [] return d)
+alwaysContinues l _
+  = False
 
 ---------------------------------------------------
-toBrisk :: (Show a, HasType a, T.Annot a) => T.EffExpr T.Id a -> Doc
+toBriskString :: (Show a, HasType a, T.Annot a) => T.EffExpr T.Id a -> String
+---------------------------------------------------
+toBriskString = render . fst . toBrisk
+
+---------------------------------------------------
+toBrisk :: (Show a, HasType a, T.Annot a) => T.EffExpr T.Id a -> (Doc, Doc)
 ---------------------------------------------------
 toBrisk e = fromIceT (runIceT (fmap toBriskAnnot e))
   where
     toBriskAnnot a = BriskAnnot False a
 
 ---------------------------------------------------
-fromIceT :: (Show a, HasType a, T.Annot a) => [IceTProcess (BriskAnnot a)] -> Doc
+fromIceT :: (Show a, HasType a, T.Annot a) => [IceTProcess (BriskAnnot a)] -> (Doc, Doc)
 ---------------------------------------------------
 fromIceT ps
-  = mkPar (fromIceTProcess <$> ps)
+  = (par, rem)
+  where
+    par           = mkPar docs
+    rem           = if null rems then mkSkip else mkPar rems
+    rems          = catMaybes mrems
+    (docs, mrems) = unzip (fromIceTProcess <$> ps)
 
 ---------------------------------------------------
-fromIceTProcess :: (Show a, HasType a, T.Annot a) => IceTProcess (BriskAnnot a) -> Doc
+fromIceTProcess :: (Show a, HasType a, T.Annot a) => IceTProcess (BriskAnnot a) -> (Doc, Maybe Doc)
 ---------------------------------------------------
 fromIceTProcess (Single pid stmt)
-  = fromIceTStmt pid (pullCaseAssignStmt stmt)
+  = (st, rem)
+  where
+    st  = fromIceTStmt pid s
+    rem = fromIceTStmt pid <$> findForever s 
+    s   = pullCaseAssignStmt stmt
 fromIceTProcess (ParIter pid pidset stmt)
-  = mkSym (prolog pid) (mkPidSet pidset) (fromIceTStmt pid (pullCaseAssignStmt stmt))
+  = (st, rem)
+  where
+    mkSet = mkSym (prolog pid) (mkPidSet pidset)
+    st    = mkSet (fromIceTStmt pid s)
+    rem   = mkSet . fromIceTStmt pid <$> findForever s
+    s     = pullCaseAssignStmt stmt
 
 pullCaseAssignStmt :: (Show a, HasType a) => IceTStmt a -> IceTStmt a  
 pullCaseAssignStmt (Case e alts d)
@@ -124,8 +162,8 @@ pullCaseAssignStmt (Seq ss)
   = Seq (pullCaseAssignStmt <$> ss)
 pullCaseAssignStmt (ForEach x xs s)
   = ForEach x xs (pullCaseAssignStmt s)
-pullCaseAssignStmt (While s)
-  = While (pullCaseAssignStmt s)
+pullCaseAssignStmt (While l s)
+  = While l (pullCaseAssignStmt s)
 pullCaseAssignStmt (Assgn x t (T.ECase ty e alts d l))
   = Case e stmtAlts stmtDflt
   where
@@ -180,11 +218,15 @@ fromIceTStmt pid (Case e cases d)
       = (mkDefault ppid . fromIceTStmt pid) <$> d
     ppid = prolog pid
 
-fromIceTStmt pid (While s)    
-  = mkWhile (prolog pid) [fromIceTStmt pid s]
+fromIceTStmt pid (While l s)    
+  = mkWhile (prolog pid) [fromIceTStmt pid body]
+  where
+    body = seqStmts [ Assgn l Nothing (T.EVar "true" T.dummyAnnot)
+                    , s
+                    ]
 
-fromIceTStmt pid Continue
-  = mkContinue
+fromIceTStmt pid (Continue l)
+  = mkAssign (prolog pid) [prolog l, mkTrue]
 
 fromIceTStmt pid (ForEach x (True, xs) s)
   = mkForEach (prolog pid) [ prolog (liftCase x)
@@ -249,10 +291,8 @@ fromIceTExpr pid (T.ECase t e alts d l)
       = mkCase ppid (fromIceTExpr pid (T.ECon c (flip T.EVar l <$> xs) l))
                     (fromIceTExpr pid e)
     ppid = prolog pid
-fromIceTExpr pid (T.EField e i _)
-  = mkField (prolog pid) [fromIceTExpr pid e, prolog i]
 fromIceTExpr pid (T.ESymElt e _)
-  = compoundTerm "nonDet" [prolog pid, fromIceTExpr pid e]
+  = compoundTerm "nondet" [prolog pid, fromIceTExpr pid e]
 fromIceTExpr pid e@(T.EApp e1 e2 l)
   | Just t <- getType l
   = fromIceTExpr pid $ T.EAny (T.EType t l) l
@@ -274,6 +314,9 @@ mkSym p set act = compoundTerm "sym" [p,set,act]
 mkSeq :: [Doc] -> Doc
 mkSeq ds = compoundTerm "seq" [listTerms ds]
 
+mkTrue  = text "true"
+mkFalse = text "false"
+         
 mkAssign :: Doc -> [Doc] -> Doc
 mkAssign = mkAction "assign" 2
 

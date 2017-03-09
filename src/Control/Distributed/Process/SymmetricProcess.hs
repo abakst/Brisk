@@ -6,6 +6,7 @@ module Control.Distributed.Process.SymmetricProcess (
   , expectFrom
   , spawnSymmetric
   , chooseSymmetric, (?!)
+  , empty
   ) where
 
 import Control.Monad
@@ -82,3 +83,6 @@ spawnSymmetric nodes p
   where
     go a n = do pid <- spawn n p
                 return (pid : a)
+
+empty :: SymSet a
+empty = fromList []

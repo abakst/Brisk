@@ -29,10 +29,10 @@ data IceTStmt_ b a = Send IceTType (E.EffExpr b a) (E.EffExpr b a)
                    | Case (E.EffExpr b a) [(E.EffExpr b a, IceTStmt_ b a)] (Maybe (IceTStmt_ b a))
                    | ForEach E.Id (Bool, E.EffExpr b a) (IceTStmt_ b a) 
                    | NonDet IceTType
-                   | While (IceTStmt_ b a)
+                   | While E.Id (IceTStmt_ b a)
                    | Fail
                    | Skip
-                   | Continue
+                   | Continue E.Id
                    | Exec (E.EffExpr b a)
                    -- Only occurs in rw traces, XAssgn p x p e ==> (x_p := eval(p,e))
                    | XAssgn b b b (E.EffExpr b a)
@@ -47,7 +47,8 @@ type IceTProcess = IceTProcess_ E.Id
 
 data IceTState a = IS { current   :: Char
                       , next      :: Char
-                      , recFns    :: [(E.Id, [E.Id])]
+                      , loopCounter :: Int
+                      , recFns    :: [(E.Id,E.Id, [E.Id])]
                       , par       :: [IceTProcess a]
                       , params    :: [E.Id]
                       , paramSets :: [(E.Id, IceTExpr a)]
@@ -66,7 +67,7 @@ queryMsgTys f g
     go b (Case _ as d)   = let z = foldl' go b (snd <$> as) in
                            maybe z (go z) d
     go b (ForEach _ _ s) = go b s
-    go b (While s)       = go b s
+    go b (While _ s)     = go b s
     go b _               = b
 
 substStmt :: (E.Annot a) => E.Id -> IceTExpr a -> IceTStmt a -> IceTStmt a
@@ -78,7 +79,7 @@ substStmt x e = go
     go (Seq ss)        = Seq (go <$> ss)
     go (Case e alts d) = Case (sub e) (fmap go <$> alts) (go <$> d)
     go (ForEach x (b, e) s) = ForEach x (b, sub e) (go s)
-    go (While s)       = While (go s)
+    go (While l s)     = While l (go s)
     go (Recv t w mx)   = Recv t (sub <$> w) mx
     go s               = s
 
@@ -96,12 +97,12 @@ instance HasType E.AnnIn where
   getType = id
   setType = const
 
-recCall :: E.Id -> ITM a (Maybe [E.Id])
+recCall :: E.Id -> ITM a (Maybe (E.Id, [E.Id]))
 recCall f
   = do fs <- gets recFns
        case fs of
          []         -> return Nothing
-         (f', xs):_ -> return (Just xs)
+         (goto, f', xs):_ -> return (Just (goto, xs))
 
 type ITM a r = State (IceTState a) r
 
@@ -164,7 +165,7 @@ runIceT e
   <$> (Single "a" stmt : par st)
   where
     aPid            = E.EVal (Just (E.CPid "a")) E.dummyAnnot
-    ((stmt, _), st) = runState (fromTopEffExp e) (IS 'a' 'b' [] [] [] [])
+    ((stmt, _), st) = runState (fromTopEffExp e) (IS 'a' 'b' 0 [] [] [] [])
 
 mapProcStmt :: (IceTStmt a -> IceTStmt a) -> IceTProcess a -> IceTProcess a
 mapProcStmt f (Single p s)      = Single p (f s)
@@ -232,6 +233,12 @@ fromEffExp s (E.EPrimOp E.FoldM [E.ELam a (E.ELam x body _) _, base, xs] l) y
                            , E.annot = l
                            } y
 
+fromEffExp s (E.ELet x e1 e2 l) mx
+  = -- Should make sure this is a PURE expression
+    do v1         <- fromPure s e1
+       (stmt, v2) <- fromEffExp (addsStore l s [x]) e2 mx
+       return (seqStmts [Assgn x (getType v1) v1, stmt], v2)
+
 fromEffExp s (E.EPrRec acc x body acc0 xs l) mx
   = do (stmt, _) <- fromEffExp s' body (Just acc)
        exs       <- fromPure s xs
@@ -281,8 +288,8 @@ fromEffExp s (E.ECase t e alts mdefault l) x
 fromEffExp s v@(E.EVar x l) _
   = recCall x >>= go
   where
-    go (Just []) = return (Continue, Nothing)
-    go _         = return (Exec v, Nothing)
+    go (Just (l, [])) = return (Continue l, Nothing)
+    go _              = return (Exec v, Nothing)
 
 fromEffExp s e@(E.EVal x _) _    
   = return (Skip, Just e)
@@ -310,9 +317,6 @@ fromPure s (E.ECase t e alts d l)
        return $ E.ECase t e' alts' d l
          where
            goAlt (c,xs,e) = (c,xs,) <$> fromPure (addsStore l s xs) e
-fromPure s (E.EField e i l)
-  = do e' <- fromPure s e
-       return (E.EField e' i l)
 fromPure s e@(E.ECon c as l)
   = do as' <- mapM (fromPure s) as
        return (E.ECon c as' l)
@@ -363,10 +367,11 @@ fromApp :: (Show a, HasType a, E.Annot a)
 -- that is not currently checked!!!
 fromApp l s erec@(E.ERec f e l') as
   | length xs == length as
-  = do modify $ \s -> s { recFns = (f,xs) : recFns s }
+  = do goto <- newLoopM
+       modify $ \s -> s { recFns = (goto,f,xs) : recFns s }
        (stmt, ebody) <- fromEffExp s' body Nothing
        modify $ \s -> s { recFns = tail (recFns s) }
-       let (rX, while) = mkWhileLoop l f stmt ebody
+       let (rX, while) = mkWhileLoop l goto f stmt ebody
            initArgs    = mkAssigns (zip xs as)
            app         = seqStmts [initArgs, while]
        return (app, Nothing)
@@ -379,8 +384,8 @@ fromApp l s exp@(E.EVar f _) as
   = do ps <- gets params
        recCall f >>= go ps
   where
-    go _ (Just xs)
-      = return (seqStmts [mkAssigns (zip xs as), Continue], Nothing)
+    go _ (Just (goto, xs))
+      = return (seqStmts [mkAssigns (zip xs as), Continue goto], Nothing)
     go ps _
       | f `notElem` ps
       = abort "fromApp" ("Unknown Function: " ++ render (pp f))
@@ -395,8 +400,8 @@ mkAssigns xas
     nonTrivialAssign x (E.EVar y _) = x /= y
     nonTrivialAssign _ _            = True
 
-mkWhileLoop l f stmt e
-  = (retx, While (seqStmts ([stmt] ++ mret)))
+mkWhileLoop l goto f stmt e
+  = (retx, While goto (seqStmts ([stmt] ++ mret)))
   where
     mret = maybe [] (return . mkAssgn) e
     retx = "ret_" ++ f
@@ -462,6 +467,11 @@ newPidM = do who <- gets next
              modify $ \s -> s { next = succ who }
              return who
 
+newLoopM :: ITM a E.Id
+newLoopM = do cur <- gets loopCounter
+              modify $ \s -> s { loopCounter = loopCounter s + 1 }
+              return ("loop" ++ show cur)
+
 addProcessM :: IceTProcess a -> ITM a ()
 addProcessM p
   = modify $ \s -> s { par = p : par s }
@@ -500,7 +510,9 @@ fromProcess :: (Show a, HasType a, E.Annot a)
 ---------------------------------------------------
 fromProcess l = fromEffExp
 
+---------------------------------------------------
 simplifyCase :: E.Annot a => IceTStmt a -> IceTStmt a
+---------------------------------------------------
 simplifyCase st@(Case (E.ECon c xs _) alts _)
   = fromMaybe st $ go alts
   where
@@ -515,13 +527,12 @@ simplifyCase st@(Case (E.ECon c xs _) alts _)
     app s _              = Nothing
 simplifyCase s = s
 
-type ANFM a = State Int a
-
 ---------------------------------------------------
 anormalize :: (Show a, HasType a) => IceTStmt a -> IceTStmt a
 ---------------------------------------------------
 anormalize s = evalState (anf s) 0
 
+type ANFM a = State Int a
 -- This anormalization just makes sure that sends have
 -- immediate arguments, that's all
 ---------------------------------------------------
@@ -531,8 +542,8 @@ anf Skip
   = return Skip
 anf Fail
   = return Fail
-anf Continue
-  = return Continue
+anf (Continue x)
+  = return (Continue x)
 anf s@Recv {}
   = return s
 anf (Send t e1 e2)
@@ -544,8 +555,8 @@ anf s@(Assgn x t e)
        return $ stitch bs (Assgn x t y)
 anf (Seq ss)
   = seqStmts <$> mapM anf ss
-anf (While s)
-  = While <$> anf s
+anf (While l s)
+  = While l <$> anf s
 anf (Case e es d)
   = do es'      <- mapM anfAlt es
        d'       <- mapM anf d
@@ -585,11 +596,6 @@ imm (E.ECon c args l)
 imm e@E.ECase {}
   = do x            <- fresh (E.annot e)
        return (x, [(E.varId x, e)])
-imm e@E.EField {}
-  = do x <- fresh (E.annot e)
-       return (x, [(E.varId x, e)])
--- imm e@(E.ELam b bdy a)
---   = return (e, [])
 imm e@(E.EApp e1 e2 l)
   = return (e, [])
 imm e
@@ -645,13 +651,13 @@ instance Pretty (IceTStmt a) where
     = text "iter" <+> pp x <+> text "in" <+> pp e <> colon $$
       nest 2 (ppPrec 0 s)
 
-  ppPrec _ (While s)
+  ppPrec _ (While l s)
     = text "while true" <> colon $$
       nest 2 (ppPrec 0 s)
 
   ppPrec _ Fail     = text "abort"
   ppPrec _ Skip     = text "skip"
-  ppPrec _ Continue = text "continue"
+  ppPrec _ (Continue _) = text "continue"
 
 ppRecv t Nothing 
   = text "recv" <> brackets (pp t)
