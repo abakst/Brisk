@@ -200,11 +200,16 @@ mGenExpr' g v@(Var x)
                 then defaultEffExpr (Nothing, s) (idType x)
                 else var (bindId x) (annotOfBind x)
 mGenExpr' g exp@(Let bnd@(NonRec b e) e')
-  = do a <- mGenExpr g e
-       let x = bindId b
-       a' <- mGenExpr (Env.insert g x (var x $ annotOfBind b)) e'
-       s  <- currentSpan
-       return $ ELet x a a' (Just (exprEType exp), s)
+  = do pure <- isPure (idType b)
+       go pure
+  where
+    go True = do a <- mGenExpr g e
+                 s  <- currentSpan
+                 let x = bindId b
+                 a' <- mGenExpr (Env.insert g x (var x $ annotOfBind b)) e'
+                 return $ ELet x a a' (Just (exprEType exp), s)
+    go False = do g' <- mGenBind g bnd
+                  mGenExpr g' e'
 mGenExpr' g (Let b e)
   = do g' <- mGenBind g b
        mGenExpr g' e
