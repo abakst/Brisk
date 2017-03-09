@@ -550,6 +550,8 @@ anf (Send t e1 e2)
   = do (x, bs1) <- imm e1
        (y, bs2) <- imm e2
        return (stitch (bs1 ++ bs2) (Send t x y))
+anf s@(Assgn x t (E.ESymElt {}))
+  = return s
 anf s@(Assgn x t e)
   = do (y, bs) <- imm e
        return $ stitch bs (Assgn x t y)

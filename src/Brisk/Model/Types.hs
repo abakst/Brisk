@@ -147,6 +147,10 @@ ofType f g = go
       = TyForAll (g . getName $ n) (go t)
       | otherwise
       = go t
+    go ty
+      = abort "ofType" (briskShowPpr ty)
+
+isFunTy = T.isFunTy
 
 tyVarName :: String -> String    
 tyVarName (s0:s)

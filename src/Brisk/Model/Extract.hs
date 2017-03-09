@@ -200,8 +200,11 @@ mGenExpr' g v@(Var x)
                 then defaultEffExpr (Nothing, s) (idType x)
                 else var (bindId x) (annotOfBind x)
 mGenExpr' g exp@(Let bnd@(NonRec b e) e')
+  | isDictId b
+  = mGenExpr' g e'
+  | otherwise
   = do pure <- isPure (idType b)
-       go pure
+       go (pure && not (Ty.isFunTy (idType b)))
   where
     go True = do a <- mGenExpr g e
                  s  <- currentSpan
