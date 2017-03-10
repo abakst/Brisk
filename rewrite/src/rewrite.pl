@@ -442,15 +442,17 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	  ;   retractall(in_remove),
 	      fail
 	  ),
-	  substitute_term(P, Proc, AProc, A)->
+%	  substitute_term(Proc, P, A, AProc),
+	  substitute_term(Proc, P, A, A1),
+	  rewrite(A1, AProc, DeltaInt, _) ->
 	  retractall(in_remove),
 	  clear_talkto,
 	  mk_pair(skip, sym(P, S, A), T1, Switched),
 %	  T1=par(skip, sym(P, S, A)),
 	  Gamma1=Gamma,
 	  Rho1=Rho,
-	  substitute_term(Fresh1, Proc, Delta2, Delta3),
-	  append(Delta, [nondet(Fresh1, S, seq(Delta3))], Delta1),
+	  substitute_term(Fresh1, Proc, Delta2-DeltaInt, Delta3-DeltaInt1),
+	  append(Delta, [for(P, S, DeltaInt1),nondet(Fresh1, S, seq(Delta3))], Delta1),
 	  (   avl_delete(Proc, Psi2, Ext0, Psi3) ->
 	      substitute_term(Fresh2, Proc, Ext0, Ext),
 	      add_external(Psi3, nondet(Fresh2, S, seq(Ext)), S, Psi1),
@@ -921,14 +923,17 @@ cleanup :-
 	retractall(max_delta(_,_,_)),
 	reset_pred_sym.
 
-rewrite(T, Rem, Ind, Gamma1, seq(Delta1), Rho1) :-
-	init_independent(Ind),
-	assert(max_delta(0, T, Delta)),
+rewrite(T, Rem, seq(Delta1), Rho1) :-
+%	assert(cache_stats(0)),
+	assert(max_delta(0, T, [])),
+	Delta=[],
 	empty_avl(Gamma),
 	empty_avl(Rho),
 	empty_avl(Psi),
-	Delta=[],
-	(   rewrite(T, Gamma, Delta, Rho, Psi, Rem, Gamma, Delta1, Rho1, Psi)->
+	rewrite(T, Gamma, Delta, Rho, Psi, Rem, Gamma, Delta1, Rho1, Psi).
+
+rewrite_debug(T, Rem, _, _, Delta1, Rho1) :-
+	(   rewrite(T, Rem, Delta1, Rho1) ->
 	    true
 	;   max_delta(_, TMax, DeltaMax),
 	    format('Max rewritten term:~n~p~n with prefix:~n~p~n' ,[TMax,DeltaMax]),

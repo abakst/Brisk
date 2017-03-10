@@ -46,6 +46,9 @@ runRewriter e mdest
          echo l
          status <- shell cmd empty
          reportStatus status
+         case status of
+           ExitSuccess   -> return ()
+           ExitFailure _ -> cp tmp "./query_failed"
          exit status
 
 reportStatus = echo . statusMsg
@@ -76,8 +79,8 @@ template tmp
            ) tmp check
   where
     check = format ("("%s%", ("%s%"; halt("%d%")) ; halt("%d%")),") rf rw notDLFree notSND
-    rf = format ("catch(check_race_freedom(T,T1),_,halt("%d%"))") notSND
-    rw = format ("catch(rewrite(T1,R,[],_,_,_),_,halt("%d%"))") notDLFree
+    rf = format ("catch(check_race_freedom(T,T1),_,halt("%d%")),!") 1
+    rw = format ("catch(rewrite(T1,R,_,_),_,halt("%d%"))") 1
     
 data BriskAnnot a = BriskAnnot { isPatternVar :: Bool
                                , annot        :: a
@@ -92,16 +95,19 @@ instance (Show a, HasType a) => HasType (BriskAnnot a) where
          
 ---------------------------------------------------
 findForever :: (Show a, HasType a, T.Annot a)
-            => IceTStmt a -> Maybe (IceTStmt a)
+            => ProcessId -> IceTStmt (BriskAnnot a) -> Maybe Doc
 ---------------------------------------------------
-findForever st@(While l s)
+findForever pid st@(While l s)
   | alwaysContinues l s
-  = Just st
+  = Just $ mkWhile (prolog pid) [prolog l, fromIceTStmt pid body]
   | otherwise
   = Nothing
-findForever (Seq ss)
-  = findForever (last ss)
-findForever _
+  where
+    assgn = Assgn l Nothing (T.EVar "false" T.dummyAnnot)
+    body = seqStmts [ assgn, s ]
+findForever pid (Seq ss)
+  = findForever pid (last ss)
+findForever _ _
   = Nothing
 
 alwaysContinues l (Continue l')
@@ -132,7 +138,10 @@ fromIceT ps
   = (par, rem)
   where
     par           = mkPar docs
-    rem           = if null rems then mkSkip else mkPar rems
+    rem           = case rems of
+                      []  -> mkSkip
+                      [r] -> r
+                      _   -> mkPar rems
     rems          = catMaybes mrems
     (docs, mrems) = unzip (fromIceTProcess <$> ps)
 
@@ -143,14 +152,14 @@ fromIceTProcess (Single pid stmt)
   = (st, rem)
   where
     st  = fromIceTStmt pid s
-    rem = fromIceTStmt pid <$> findForever s 
+    rem = findForever pid s 
     s   = pullCaseAssignStmt stmt
 fromIceTProcess (ParIter pid pidset stmt)
   = (st, rem)
   where
     mkSet = mkSym (prolog pid) (mkPidSet pidset)
     st    = mkSet (fromIceTStmt pid s)
-    rem   = mkSet . fromIceTStmt pid <$> findForever s
+    rem   = mkSet <$> findForever pid s
     s     = pullCaseAssignStmt stmt
 
 pullCaseAssignStmt :: (Show a, HasType a) => IceTStmt a -> IceTStmt a  
@@ -199,6 +208,13 @@ fromIceTStmt pid (Recv ty w my)
           Just "_" -> prolog ("dev_null__" :: String)
           Just y   -> prolog y
 
+fromIceTStmt pid (Assgn x _ (T.ESymElt e _))
+  = compoundTerm "nondet" [
+         prolog (liftCase x)
+       , fromIceTPidSet pid e
+       , mkAssign (prolog pid) [prolog x, prolog (liftCase x) ]
+    ]
+
 fromIceTStmt pid (Assgn x _ e)
   = mkAssign (prolog pid) [prolog x, fromIceTExpr pid e]
 
@@ -219,11 +235,13 @@ fromIceTStmt pid (Case e cases d)
     ppid = prolog pid
 
 fromIceTStmt pid (While l s)    
-  = mkWhile (prolog pid) [fromIceTStmt pid body]
+  = mkSeq [ fromIceTStmt pid (assgn "true")
+          , mkWhile (prolog pid) [prolog l, fromIceTStmt pid body]
+          ]
   where
-    body = seqStmts [ Assgn l Nothing (T.EVar "true" T.dummyAnnot)
-                    , s
-                    ]
+    a       = T.dummyAnnot
+    assgn b = Assgn l Nothing (T.EVar b a)
+    body    = seqStmts [ assgn "false", s ]
 
 fromIceTStmt pid (Continue l)
   = mkAssign (prolog pid) [prolog l, mkTrue]
@@ -339,7 +357,7 @@ mkContinue :: Doc
 mkContinue = prolog ("continue" :: String)
 
 mkWhile :: Doc -> [Doc] -> Doc  
-mkWhile = mkAction "while" 1
+mkWhile = mkAction "while" 2
 
 mkForEach :: Doc -> [Doc] -> Doc
 mkForEach = mkAction "for" 3
