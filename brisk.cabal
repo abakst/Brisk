@@ -20,12 +20,14 @@ data-files:        rewrite.pl, lib/misc.pl, tags.pl
 
 library
   -- build-tools:       alex, happy
+  other-modules:     Brisk.Transform.Misc
+                   , Brisk.Transform.SpanStack
   exposed-modules:   Brisk.Plugin
                    , Brisk.UX
                    , Brisk.Annotations
                    -- , Brisk.Transform.SpanStack
                    -- , Brisk.Transform.Misc
-                   -- , Brisk.Transform.ANF
+                   , Brisk.Transform.ANF
                    , Brisk.Pretty
                    , Brisk.Model.Env
                    , Brisk.Model.Types
@@ -100,4 +102,5 @@ executable brisk
                , cereal
                , pretty
                , turtle
+               , text
                , transformers

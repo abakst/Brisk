@@ -19,7 +19,7 @@ import Text.Show.Pretty (ppShow)
 
 import qualified Data.Set as Set
 import qualified Brisk.Model.Env as Env
--- import           Brisk.Transform.ANF
+import           Brisk.Transform.ANF (anormalize)
 import           Brisk.Model.GhcInterface
 import           Brisk.Model.Types
 import           Brisk.Model.Builtins
@@ -30,18 +30,20 @@ import           Brisk.Pretty
 import           Text.PrettyPrint.HughesPJ as PP
 
 type MGen a  = StateT MGState IO a
-data MGState = MGS { hscEnv   :: !HscEnv
-                   , modGuts  :: !ModGuts
-                   , procTy   :: !Name
-                   , cnt      :: !Int
-                   , srcSpans :: ![SrcSpan]
+data MGState = MGS { hscEnv    :: !HscEnv
+                   , modGuts   :: !ModGuts
+                   , impureTys :: ![Id]
+                   , procTy    :: !Id
+                   , cnt       :: !Int
+                   , srcSpans  :: ![SrcSpan]
                    }
 
 -- initialEState :: HscEnv -> ModGuts -> Var -> MGState
-initialEState henv mg t
+initialEState henv mg p t
   = MGS { hscEnv   = henv
         , modGuts  = mg
-        , procTy   = t 
+        , impureTys   = t 
+        , procTy   = p
         , cnt      = 0
         , srcSpans = [noSrcSpan]
         }
@@ -87,13 +89,26 @@ specTableEnv :: SpecTableIn -> EffMap
 specTableEnv (SpecTable tab)
   = Env.addsEnv Env.empty [ (x, liftAnnot <$> t) | x :<=: t <- tab ]
 
+impureTypes = [ ("Control.Distributed.Process.Internal.Types", "Process")
+              , ("Control.Distributed.Static", "Closure")
+              ]
+
 runMGen :: [String] -> HscEnv -> ModGuts -> SpecTableIn -> CoreProgram -> IO SpecTableOut
 runMGen bs hsenv mg specs@(SpecTable speccies) prog
   = do -- initBinds <- resolve hsenv (specTuple <$> specs)
        -- let g0    = Env.addsEnv Env.empty [ (nameId x, specAnnot <$> b) | (x,b) <- initBinds ]
-       let g0    = Env.unionEnvs (specTableEnv builtin) (specTableEnv specs)
-       procTy    <- ghcTyName hsenv "Control.Distributed.Process.Internal.Types" "Process"
-       g         <- evalStateT (go g0 prog) (initialEState hsenv mg procTy)
+       prog'    <- liftIO $ anormalize hsenv mg prog
+       -- builtin' <- do forM (let SpecTable ts = builtin in ts) $ \(x :<=: t) -> do
+       --                  let (m, n) = modulePrefix x
+       --                  nm <- ghcVarName hsenv m n
+       --                  return (nameId nm :<=: t)
+       
+       -- putStrLn (briskShowPpr prog')
+       let g0    = Env.unionEnvs (specTableEnv {- binfix -} builtin) (specTableEnv specs)
+           -- binfix = SpecTable builtin'
+       impureTys <- forM impureTypes $ \(m,t) -> nameId <$> ghcTyName hsenv m t
+       procTy    <- nameId <$> ghcTyName hsenv "Control.Distributed.Process.Internal.Types" "Process"
+       g         <- evalStateT (go g0 prog') (initialEState hsenv mg procTy impureTys)
        ns        <- forM bs findModuleNameId
        let all   = Env.toList g
            brisk = filter ((`elem` ns) . fst) all
@@ -109,17 +124,20 @@ runMGen bs hsenv mg specs@(SpecTable speccies) prog
 
 isPure :: Ty.Type -> MGen Bool
 isPure t
-  = do ty <- gets procTy
-       return $ go ty t
+  = do ty <- gets impureTys
+       let r = go ty t
+       liftIO $ putStrLn ("isPure:\n\t" ++ briskShowPpr t ++ " " ++ show r)
+       return r
   where
-    go t (Tr.TyVarTy t')     = True
-    go t (Tr.LitTy _)        = True
-    go t (Tr.AppTy t1 t2)    = True
-    go t (Tr.TyConApp tc [_,t']) {- FunTy _ t') -}
+    go :: [Id] -> Ty.Type -> Bool
+    go ts (Tr.TyVarTy t')     = True
+    go ts (Tr.LitTy _)        = True
+    go ts (Tr.AppTy t1 t2)    = True
+    go ts (Tr.TyConApp tc [_,t']) {- FunTy _ t') -}
      | isFunTyCon tc
-     = go t t'
-    go t (Tr.TyConApp tc ts) = cmp t tc
-    go t (Tr.ForAllTy _ t')  = go t t'
+     = go ts t'
+    go ts (Tr.TyConApp tc _) = nameId (getName tc) `notElem` ts
+    go ts (Tr.ForAllTy _ t')  = go ts t'
     cmp t t' = nameId (getName t) /= nameId (getName t')
 
 dumpBinds :: [(Id, AbsEff)] -> IO ()
@@ -210,7 +228,10 @@ mGenExpr' g exp@(Let bnd@(NonRec b e) e')
                  s  <- currentSpan
                  let x = bindId b
                  a' <- mGenExpr (Env.insert g x (var x $ annotOfBind b)) e'
-                 return $ ELet x a a' (Just (exprEType exp), s)
+                 if x `elem` fv a' then
+                   return $ ELet x a a' (Just (exprEType exp), s)
+                 else
+                   return a'
     go False = do g' <- mGenBind g bnd
                   mGenExpr g' e'
 mGenExpr' g (Let b e)
@@ -267,7 +288,7 @@ mGenExpr' g e
 mGenMonadOp :: NamedThing a => a -> TyCon -> MGen (Maybe AbsEff)
 mGenMonadOp f tc
   = do tc' <- gets procTy
-       if tc' == getName tc then
+       if nameId (getName tc) == tc' then
          return (noAnnot <$> monadOp f)
        else
          return Nothing
@@ -290,7 +311,7 @@ mGenApp g e@(EVar x l) a2
 mGenApp _ e@(EVal _ _) _
   = return e
 mGenApp _ e1 e2
-  = error ("App: " ++ render (pp e1 <+> pp e2))
+  = error ("App:\n" ++ render (pp e1 PP.$$ pp e2))
 
 substIf :: Id -> Set.Set Id -> AbsEff -> AbsEff -> AbsEff
 substIf x xs a

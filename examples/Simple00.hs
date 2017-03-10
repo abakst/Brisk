@@ -4,8 +4,7 @@ module Simple00 where
 import Control.Distributed.Process
 
 main :: Process () 
-main = do p <- getSelfPid
-          m <- expect :: Process Int
+main = do m <- expect :: Process Int
           return ()
 
 someUndefinedFunc :: () -> ProcessId          

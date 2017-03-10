@@ -417,6 +417,7 @@ instance Prolog String where
          . last
          . textNoDots
     where
+      repl '$'  = "_dll_"
       repl '#'  = "_mh_"
       repl '\'' = "_"
       repl '.'  = "__"

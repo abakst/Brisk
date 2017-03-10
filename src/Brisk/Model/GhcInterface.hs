@@ -1,6 +1,8 @@
 {-# language DoAndIfThenElse #-}
 module Brisk.Model.GhcInterface where
 
+import Data.Text                        (pack)
+import Data.Text.Encoding               (encodeUtf8)
 import GhcPlugins
 import Avail
 import Var
@@ -150,8 +152,14 @@ nameId n = briskShowPpr $ concatFS [modFS, occFS, uniqFS]
     uniqFS
        | isSystemName n
        = concatFS [fsLit "_",  fsLit (briskShowPpr (getUnique n))]
+       | getOccName n == anfOccName
+       = concatFS [fsLit "_",  fsLit (briskShowPpr (getUnique n))]
        | otherwise
        = fsLit ""
+       -- concatFS [fsLit "_",  fsLit (briskShowPpr (getUnique n))]
+
+anfOccName
+  = mkVarOccFS . mkFastStringByteString . encodeUtf8 . pack $ "$$brisk_anf"
 
 tyConId :: TyCon -> String    
 tyConId tc
