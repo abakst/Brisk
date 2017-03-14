@@ -106,7 +106,8 @@ runMGen bs hsenv mg specs@(SpecTable speccies) prog
        -- putStrLn (briskShowPpr prog')
        let g0    = Env.unionEnvs (specTableEnv {- binfix -} builtin) (specTableEnv specs)
            -- binfix = SpecTable builtin'
-       impureTys <- forM impureTypes $ \(m,t) -> nameId <$> ghcTyName hsenv m t
+       impureTys <- forM impureTypes $
+                      fmap nameId . uncurry (ghcTyName hsenv)
        procTy    <- nameId <$> ghcTyName hsenv "Control.Distributed.Process.Internal.Types" "Process"
        g         <- evalStateT (go g0 prog') (initialEState hsenv mg procTy impureTys)
        ns        <- forM bs findModuleNameId
@@ -125,9 +126,7 @@ runMGen bs hsenv mg specs@(SpecTable speccies) prog
 isPure :: Ty.Type -> MGen Bool
 isPure t
   = do ty <- gets impureTys
-       let r = go ty t
-       liftIO $ putStrLn ("isPure:\n\t" ++ briskShowPpr t ++ " " ++ show r)
-       return r
+       return $ go ty t
   where
     go :: [Id] -> Ty.Type -> Bool
     go ts (Tr.TyVarTy t')     = True
@@ -222,18 +221,20 @@ mGenExpr' g exp@(Let bnd@(NonRec b e) e')
   = mGenExpr' g e'
   | otherwise
   = do pure <- isPure (idType b)
-       go (pure && not (Ty.isFunTy (idType b)))
+       a    <- mGenExpr g e
+       go a pure
   where
-    go True = do a <- mGenExpr g e
-                 s  <- currentSpan
-                 let x = bindId b
-                 a' <- mGenExpr (Env.insert g x (var x $ annotOfBind b)) e'
-                 if x `elem` fv a' then
-                   return $ ELet x a a' (Just (exprEType exp), s)
-                 else
-                   return a'
-    go False = do g' <- mGenBind g bnd
-                  mGenExpr g' e'
+    go a pure
+     | pure && not (isVal a || isFun a)
+     = do s  <- currentSpan
+          let x = bindId b
+          a' <- mGenExpr (Env.insert g x (var x $ annotOfBind b)) e'
+          if x `elem` fv a' then
+            return $ ELet x a a' (Just (exprEType exp), s)
+          else
+            return a'
+     | otherwise
+     = mGenExpr (Env.insert g (bindId b) a) e'
 mGenExpr' g (Let b e)
   = do g' <- mGenBind g b
        mGenExpr g' e

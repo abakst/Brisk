@@ -113,7 +113,7 @@ builtin = SpecTable [
                            (TyVar "A")
                            (EVar "msg" Nothing)
                            [ ( "Control.DistributedProcess.SymmetricProcess.SelfSigned"
-                             , ["_", "pay"]
+                             , ["X", "pay"]
                              , EPrimOp Return [EVar "pay" (Just (TyVar "A"))] Nothing
                              )
                            ]

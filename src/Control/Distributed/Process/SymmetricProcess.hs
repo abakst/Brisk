@@ -2,6 +2,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 module Control.Distributed.Process.SymmetricProcess (
     SymSet
+  , SelfSigned
   , selfSign, payload
   , expectFrom
   , spawnSymmetric

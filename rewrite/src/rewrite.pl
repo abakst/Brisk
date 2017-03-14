@@ -119,10 +119,16 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	  */
 	  functor(T, assign, 3),
 	  T=assign(P, X, V),
-	  atomic(P)->
+	  ground(P) ->
 	  T1=skip,
 	  append(Delta, [T], Delta1),
-	  avl_store(P-X, Rho, V, Rho1),
+	  (   nonvar(V),
+	      (   avl_member(P-V, Rho, V1)->
+		  avl_store(P-X, Rho, V1, Rho1)
+	      ;   avl_store(P-X, Rho, V, Rho1)
+	      )
+	  ;   throw(assing-to-var(assign(P, X, V)))
+	  ),
 	  Gamma1=Gamma,
 	  Psi1=Psi
 	  /*
@@ -156,9 +162,9 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	  Delta1=Delta,
 	  Rho1=Rho,
 	  empty_avl(Psi1)
-	/*
+	/*****************************************
 	recv: receive if there's a pending message.
-	*/
+	*****************************************/
 	; parse_recv(T, Rho, P, Q, Type, X),
 	  avl_member(Q-P, Gamma, [V-Type|Vs]) ->
 	  T1=skip,
@@ -167,24 +173,31 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	      avl_delete(Q-P, Gamma, _, Gamma1)
 	  ;   avl_store(Q-P, Gamma, Vs, Gamma1)
 	  ),
-	  update_constants(P, X, V, Rho, Rho1),
+	  (   /****************************************
+	      propagate constant from assignment in Q.
+	      ****************************************/
+	      propagate_const(Q, V, Rho, V1)
+	  ;   V1=V
+	  ),
+	  update_constants(P, X, V1, Rho, Rho1),
 	  Psi=Psi1
 	/*
 	Case
 	*/
 	; functor(T, cases, 4),
 	  T=cases(P, X, Cs, _),
-	  match_case(P, X, Cs, Rho, A) ->
+	  match_case(P, X, Cs, Rho, Rho1, A) ->
 	  T1=A,
 	  Gamma1=Gamma, Delta1=Delta,
-	  Rho1=Rho, Psi1=Psi
+	  Psi1=Psi
 	/*
 	sym(P, S, A): reduce A in sym(P, S, A)
 	*/
 	; functor(T, sym, 3),
 	  T=sym(P, S, A),
 	  empty_avl(Psi),
-	  fresh_pred_sym(Proc),
+%	  fresh_pred_sym(Proc),
+	  make_instance(Proc),
 	  replace_proc_id(Proc, S, Rho, Rho2),
 	  copy_instantiate(A, P, Proc, A1),
 	  rewrite_step(A1, Gamma, [], Rho2, Psi, B, Gamma, Delta2, Rho3, Psi) ->
@@ -303,7 +316,8 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	*/
 	; functor(T, nondet, 2) ->
 	  T = nondet(P, A),
-	  fresh_pred_sym(Proc),
+	  %fresh_pred_sym(Proc),
+	  make_instance(Proc),
 	  copy_instantiate(A, P, Proc, T1),
 	  Gamma1=Gamma,
 	  Delta1=Delta,
@@ -315,7 +329,8 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	*/
 	; functor(T, nondet, 3) ->
 	  T = nondet(P, S, A),
-	  fresh_pred_sym(Proc),
+	  %fresh_pred_sym(Proc),
+	  make_instance(Proc),
 	  assert(asserted(element(Proc, S))),
 	  assert(asserted(fresh(Proc))),
 	  copy_instantiate(A, P, Proc, T1),
@@ -358,8 +373,10 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	  For=for(M, P, S, A),
 	  arg(2, T, Sym),
 	  Sym=sym(Q, S, B),
-	  fresh_pred_sym(Proc),
-	  fresh_pred_sym(S1),
+%	  fresh_pred_sym(Proc),
+	  make_instance(Proc),
+	%	  fresh_pred_sym(S1),
+	  make_instance(S1),
 	  assert(symset(Proc, S)),
 	  copy_instantiate(A, P, Proc, A1),
 	  assert(asserted(prop_subset(emp, S1))),
@@ -414,6 +431,39 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
               add_external(Psi3, iter(Proc, K, seq(Ext)), Proc, Psi1)
 	  ;   Psi1=Psi
 	  )
+	/* Rewrite cases in context. Syntax reminder:
+	cases(p, x, C, d)   : proccess p performs a case switch on x with cases specified in
+	| C=case(p, exp, A) : C and default case d.
+	*/
+	; functor(T, par, 2),
+	  mk_pair(TA, D, T, Switched),
+	  normalize_seq(TA, TA1),
+	  (   functor(TA1, seq, 1)->
+	      TA1=seq([Cases|C]),
+	      functor(Cases, cases, 4),
+	      Cases=cases(P, X, Cs, skip)
+	  ;   functor(TA1, cases, 4),
+	      TA1=cases(P, X, Cs, skip),
+	      C=[]
+	  ),
+          \+match_case(P, X, Cs, Rho, _, _),
+          atomic(X),
+          (   foreach(case(P, Exp, A), Cs),
+	      foreach(case(P, Exp, CDelta), CDeltas),
+	      fromto(full_avl, In, Out, Rho1),
+	      param([X,D,C,Gamma,Rho,Psi,Gamma2, Switched, Pair1])
+	  do  T2=seq([assign(P,X,Exp),A|C]),
+	      mk_pair(T2, D, Pair, Switched),
+	      /* rewrite onge component to skip */
+	      mk_pair(skip, _, Pair1, _),
+%	      mk_pair(_, skip, Pair1, _),
+	      rewrite(Pair, Gamma, [], Rho, Psi, Pair1, Gamma2, CDelta, Rho2, Psi),
+	      intersect_avl(In, Rho2, Out)
+	  )->
+          append(Delta, [cases(P, X, CDeltas)], Delta1),
+	  Gamma1=Gamma2,
+          unswitch_pair(Pair1, Switched, T1),
+	  Psi1=Psi
 	/*
 	================
 	sym-repeat
@@ -507,7 +557,8 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	  nonvar(S),
 	  is_valid(prop_subset(emp, S1)),
 	  is_valid(subset(S1,S))->
-	  fresh_pred_sym(Proc),
+	  make_instance(Proc),
+%	  fresh_pred_sym(Proc),
           is_valid(subset(S1,S)),
 	  set_talkto(P, Proc),
 	  assert(symset(Proc, S1)),
@@ -572,8 +623,8 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	  ;   Vs=[]
 	  ),
 
-	  substitute_constants(V, P, Rho, V1),
-	  append(Vs, [V1-Type], Vs1),
+%	  substitute_constants(V, P, Rho, V1),
+	  append(Vs, [V-Type], Vs1),
 	  avl_store(P-Q, Gamma, Vs1, Gamma1),
 	  T1=skip,
 	  Delta1=Delta,
@@ -654,33 +705,6 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	  T1=par(skip, skip),
 	  Psi1=Psi
 
-/* Rewrite cases in context. Syntax reminder:
- cases(p, x, C, d)   : proccess p performs a case switch on x with cases specified in
- | C=case(p, exp, A) : C and default case d.
-*/
-	; functor(T, par, 2),
-          T=par(TA, D),
-	  (   functor(TA, seq, 1)->
-	      TA=seq([Cases|C]),
-	      functor(Cases, cases, 4),
-	      Cases=cases(P, X, Cs, skip)
-	  ;   functor(TA, cases, 4),
-	      TA=cases(P, X, Cs, skip),
-	      C=[]
-	  ),
-          (   foreach(case(P, Exp, A), Cs),
-	      foreach(CDelta, CDeltas),
-	      param([X,D,C,Gamma,Rho,Psi,Gamma2, Switched, Pair1])
-	  do  mk_pair(seq([assign(P,X,Exp),A|C]), D, Pair, Switched),
-	      %unswitch_pair(Pair1, Switched, par(_,skip)),
-	      mk_pair(_, skip, Pair1, _),
-	      rewrite(Pair, Gamma, [], Rho, Psi, Pair1, Gamma2, CDelta, _, Psi)
-	  )->
-          append(Delta, [cases(P, X, CDeltas)], Delta1),
-	  empty_avl(Rho1),
-	  Gamma1=Gamma2,
-          unswitch_pair(Pair1, Switched, T1),
-	  Psi1=Psi
 	  /*
 	  par(A, B): rewrite ordered pairs.
 	  */
@@ -733,13 +757,28 @@ update_max_delta(T, Delta) :-
 	
 
 cleanup_seq(T, T1) :-
+	/*
+	Applies on of the transformations:
+	     seq([skip|As]) -->  seq([As]) and
+             seq([A])       -->  A
+	or fails, otherwise.
+	*/
 	functor(T, seq, 1),
-	(   T=seq([A]),
-	    A\==skip->
+	(   T=seq([A])->
 	    T1=A
 	;   T=seq([skip|B]),
 	    B\==[]->
 	    T1=seq(B)
+	).
+
+normalize_seq(T, T1) :-
+	/*
+	Recursively cleans up a sequential composition.
+	*/
+	(   nonvar(T),
+	    cleanup_seq(T, T2) ->
+	    normalize_seq(T2, T1)
+	;   T1=T
 	).
 
 smaller_than(T, T1) :-
@@ -796,7 +835,48 @@ sanity_check(L) :-
 	(   foreach(X, L)
 	do  nonvar(X)->
 	    true
-	;   throw(parameter_not_instantiated(X))
+	;   throw(parameter_not_instantiated(X-L))
+	).
+match(X, Exp) :-
+	(   atomic(X),
+	    simple(Exp)
+	;   compound(X),
+	    compound(Exp)->
+	    functor(X, F, Arity),
+	    functor(Exp, F, Arity)
+	).
+update_const_match(P, X, Exp, Rho, Rho1) :-
+	(   atomic(X)->
+	    avl_store(P-X, Rho, Exp, Rho1)
+	;   same_functor(Exp, X),
+	    (   foreacharg(ArgX, Exp),
+		foreacharg(ArgExp, X),
+		fromto(Rho, In, Out, Rho1),
+		param(P)
+	    do  update_const_match(P, ArgX, ArgExp, In, Out)
+	    )
+	;   Rho1=Rho
+	).
+
+propagate_const(P, X, Rho, X1) :-
+	/*
+	Substitute all assignments in rho for p's var x.
+        If x's value is a composite term, recursively substitute
+	assignments for its subterms.
+	*/
+	(   avl_member(P-X, Rho, X2)->
+	    (   simple(X2) ->
+		X1=X2
+	    ;   compound(X2) ->
+		(   same_functor(X2, X1),
+		    (   foreacharg(Arg, X2),
+			foreacharg(Arg1, X1),
+			param([P,Rho])
+		    do  propagate_const(P, Arg, Rho, Arg1)
+		    )
+		)
+	    )
+	;   X1=X
 	).
 
 unpack_par(T, L) :-
@@ -817,6 +897,24 @@ unpack_par(T, L) :-
 	).
 
 
+intersect_avl(A, B, Res) :-
+	/*
+	Res contains all common assignments between A and B.
+        Intersecting with full_avl preserves all constants.
+	*/
+	(   A==full_avl->
+	    Res=B
+	;   avl_domain(A, Dom),
+	    (   foreach(Key, Dom),
+		fromto(empty, In, Out, Res),
+		param([A,B])
+	    do  (   avl_fetch(Key, A, Val),
+		    avl_fetch(Key, B, Val)->
+		    avl_store(Key, In, Val, Out)
+		;   In=Out
+		)
+	    )
+	).
 update_constants(P, X, V, Rho, Rho1) :-
 	(   var(V) ->
 	    Rho1=Rho
@@ -826,7 +924,7 @@ update_constants(P, X, V, Rho, Rho1) :-
 	    V=pair(V1, V2) ->
 	    update_constants(P, X1, V1, Rho, Rho2),
 	    update_constants(P, X2, V2, Rho2, Rho1)
-	;   %ground(V) ->
+	;   ground(V) ->
 	    avl_store(P-X, Rho, V, Rho1)
 %	;   throw(pair-matching-error(X,V))
 	).
@@ -858,26 +956,29 @@ check_cond(Cond, P, Rho) :-
 	    catch(Cond1, _, fail)
 	).
 
-match_case(P, X, Cases, Rho, Res) :-
+match_case(P, X, Cases, Rho, Rho1, Res) :-
 	/*
 	Match variable X of process p with Cases.
-        Binds A to the matching case or fails if no matching case exists.
+        Binds Res to the matching case or fails if no matching case exists.
 	Cases=[C_1,C_2,...] with C_i=case(p, exp, A). Throws an exception if
 	multiple cases match.
 	*/
-	avl_member(P-X, Rho),
-	substitute_constants(X, P, Rho, X1),
+	propagate_const(P, X, Rho, X1),
 	(   foreach(case(P, Exp, A), Cases),
-	    fromto(none, In, Out, Res),
+	    fromto(none, In, Out, Res-Exp),
 	    param([P, X1])
-	do  (   X1=Exp->
+	do  (   match(X1, Exp)->
 		(   In==none->
-		    Out=A
-		;   throw(cases-exp-multiple-matches(X1,In,Exp))
+		    Out=A-Exp
+		;   throw(cases-exp-double-match-between(X1,In,Exp))
 		)
 	    ;   In=Out
 	    )
-	).
+	),
+	update_const_match(P, X1, Exp, Rho, Rho1).
+
+
+
 
 is_valid(T) :-
 	/*
@@ -912,6 +1013,8 @@ init_independent(L) :-
 	do  assert(independent(P,Q)),
 	    assert(independent(Q,P))
 	).
+make_instance(Inst) :-
+	fresh_pred_sym(Inst).
 
 cleanup :-
 	clear_talkto,
@@ -961,8 +1064,8 @@ unit_test :-
 	     cleanup,
 	     statistics(runtime, [Time0|_]),
 	     format_result(catch(check_race_freedom(T, T1), _, fail), Race) ->
-%	     findall(P-Q, tags_independent(P, Q), IndSet),
-	     format_result(rewrite(T1, Rem, Ind, _, _, _), Rewrite)->
+	     %findall(P-Q, tags_independent(P, Q), IndSet),
+	     format_result(rewrite(T1, Rem, _, _), Rewrite)->
 	     statistics(runtime, [Time1|_]),
 	     Time is (Time1-Time0),
 	     set_output(Out),

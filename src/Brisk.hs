@@ -1,3 +1,5 @@
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE OverloadedStrings #-}
 module Main where
 
 import GHC
@@ -17,26 +19,40 @@ import Outputable
 import DriverPipeline
 import StringBuffer
 import HeaderInfo
-
+import Data.Maybe
 import Brisk.Model.Types
 import Brisk.Model.Prolog
 import Text.Show.Pretty
+import Options.Generic
+import System.Exit
 
 main :: IO ()
-main = do [fn, fun] <- getArgs
-          runBrisk fn fun
+main = do Check f b q <- getRecord "Brisk"
+          let binder = fromMaybe "main" b
+          runBrisk f binder q
 
-runBrisk :: String -> String -> IO ()
-runBrisk fn fun
+data Brisk = Check { file   :: String
+                   , binder :: Maybe String
+                   , query  :: Maybe String
+                   }
+             deriving (Generic, Show)
+instance ParseRecord Brisk
+
+runBrisk :: String -> String -> Maybe String -> IO ()
+runBrisk fn fun msave
   = runGhc (Just libdir) $ do
       hsc_env <- getSession
       dflags  <- getSessionDynFlags
       let dflags' = dflags { hscTarget         = HscInterpreted
                            , ghcLink           = LinkInMemory
                            , pluginModNames    = [plugMod]
-                           , verbosity         = 0
+                           , packageFlags      = [distStatic]
+                           , verbosity         = 1
                            }
-          plugMod = mkModuleName "Brisk.Plugin"
+          plugMod    = mkModuleName "Brisk.Plugin"
+          distStatic = ExposePackage "distributed-static"
+                                     (PackageArg "distributed-static")
+                                     (ModRenaming True [])
       setSessionDynFlags dflags'
       setTargets [Target (TargetFile fn Nothing) False Nothing]
       liftIO $ putStrLn "Compiling..."
@@ -52,11 +68,10 @@ runBrisk fn fun
       let st   = wordsToSpecTable v
           effm = lookupTable (modNm `qualify` fun) st
       liftIO $ case effm of
-                 Nothing  ->
-                   putStrLn $ ":("
-                 Just eff -> do
-                   liftIO $ putStrLn "Checking..."
-                   runRewriter eff Nothing
+                 Nothing  -> do
+                   putStrLn $ "Unknown name: " ++ fun
+                   exitFailure
+                 Just eff -> runRewriter eff msave
 
 qualify :: String -> String -> String
 qualify mn b = mn ++ "." ++ b

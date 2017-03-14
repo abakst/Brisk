@@ -126,6 +126,15 @@ type Process b a  = EffExpr b a
 type EffType b a  = EffExpr b a
 type PureExpr b a = EffExpr b a
 
+isFun, isVal :: EffExpr b a -> Bool
+isVal EVal{} = True                    
+isVal ECon{} = True
+isVal _      = False
+
+isFun (ELam {})      = True
+isFun (ELet _ _ e _) = isFun e
+isFun _              = False
+
 ----------------------------------------------- 
 -- | Type Conversion 
 ----------------------------------------------- 

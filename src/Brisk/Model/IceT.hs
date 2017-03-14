@@ -172,6 +172,19 @@ mapProcStmt f (Single p s)      = Single p (f s)
 mapProcStmt f (ParIter p ps s)  = ParIter p ps (f s)
 mapProcStmt f (Unfold p0 p ps s t) = Unfold p0 p ps (f s) (f t)
 
+floatLets (E.ECon c es l)
+  = (concat bs, E.ECon c es' l)
+  where
+   (bs, es') = unzip (floatLets <$> es)
+floatLets (E.ELet x e1 e2 l)
+  = ((x,e1):bs, e)
+  where
+    (bs, e) = floatLets e2
+floatLets e = ([], e)
+
+-- Foo(let x = e1 in e2, let y = e1' in e2')
+-- ==> ([(x,e1)], e2)
+
 ---------------------------------------------------
 anormalizeProc :: (Show a, HasType a)
                => IceTProcess a
@@ -221,8 +234,13 @@ fromEffExp s (E.EPrimOp E.Bind [e1, E.ELam x e2 l2] l1) y
   = fromBind s l1 l2 e1 x e2 y
 
 fromEffExp s (E.EPrimOp E.Return [e] l) y
-  = do e' <- fromPure s e
-       return (Skip, Just e')
+  = do let (bs, e') = floatLets e
+           -- This is probably a bug
+           s'       = addsStore l s (fst <$> bs)
+       assigns      <- sequence [ (x,) <$> fromPure s' e | (x,e) <- bs ]
+       let stmts    = seqStmts [Assgn x (getType v) v | (x,v) <- assigns]
+       e''          <- fromPure s' e'
+       return (stmts, Just e'')
 
 fromEffExp s (E.EPrimOp E.FoldM [E.ELam a (E.ELam x body _) _, base, xs] l) y       
   = fromEffExp s  E.EPrRec { E.precAcc = a
@@ -235,9 +253,9 @@ fromEffExp s (E.EPrimOp E.FoldM [E.ELam a (E.ELam x body _) _, base, xs] l) y
 
 fromEffExp s (E.ELet x e1 e2 l) mx
   = -- Should make sure this is a PURE expression
-    do v1         <- fromPure s e1
+    do as         <- unwrapLets s x e1
        (stmt, v2) <- fromEffExp (addsStore l s [x]) e2 mx
-       return (seqStmts [Assgn x (getType v1) v1, stmt], v2)
+       return (seqStmts (reverse (stmt : as)), v2)
 
 fromEffExp s (E.EPrRec acc x body acc0 xs l) mx
   = do (stmt, _) <- fromEffExp s' body (Just acc)
@@ -306,10 +324,21 @@ fromEffExp s e@E.ECon {} _
 fromEffExp s e _
   = error ("fromEffExpr:\n" ++ E.exprString e)
 
+unwrapLets s x (E.ELet y e1 e2 _)  
+  = do as <- unwrapLets s y e1
+       v  <- fromPure s e2
+       return (Assgn x (getType e2) v : as)
+unwrapLets s x e
+  = do v <- fromPure s e
+       return $ [Assgn x (getType e) v]
+
 fromPure :: (Show a, HasType a)
          => Store a
          -> IceTExpr a
          -> ITM a (IceTExpr a)
+fromPure s (E.ELet x e1 e2 l)
+  = do v1 <- fromPure s e1
+       fromPure (extendStore s x v1) e2
 fromPure s (E.ECase t e alts d l)
   = do e'    <- fromPure s e
        alts' <- mapM goAlt alts

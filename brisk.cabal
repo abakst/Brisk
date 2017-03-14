@@ -85,22 +85,24 @@ executable brisk
   main-is: Brisk.hs
   hs-source-dirs: src
   default-language: Haskell2010
-  other-modules:
-                Brisk.Model.GhcInterface
-              , Brisk.Model.IceT
-              , Brisk.Model.Prolog
-              , Brisk.Model.Types
-              , Brisk.Pretty
-              , Brisk.UX
+  -- other-modules:
+  --               Brisk.Model.GhcInterface
+  --             , Brisk.Model.IceT
+  --             , Brisk.Model.Prolog
+  --             , Brisk.Model.Types
+  --             , Brisk.Pretty
+  --             , Brisk.UX
   build-depends: base >= 4 && < 5
                , ghc
                , ghc-paths
+               , brisk
                , pretty-show
                , utf8-string
                , bytestring
                , containers
-               , cereal
+               , optparse-generic
                , pretty
+               , cereal
                , turtle
                , text
                , transformers

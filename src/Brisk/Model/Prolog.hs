@@ -39,17 +39,22 @@ runRewriter e mdest
              rwquery   = queryTemplate (fromString (render inp)) (fromString (render rem))
              cmd     = format ( "sicstus -l " % s
                               % " --goal "    % w
-                              % " --noinfo --nologo"
+                              % " --noinfo --nologo "
+                              % "2>/dev/null "
+                              % "1>/dev/null "
                               ) (fromString rw) query
          output tmp (select $ textToLines rwquery)
          l <- select $ textToLines cmd
-         echo l
+         {- echo l -}
+         maybe (return ()) (saveTemp tmp) mdest
          status <- shell cmd empty
          reportStatus status
          case status of
            ExitSuccess   -> return ()
            ExitFailure _ -> cp tmp "./query_failed"
          exit status
+  where
+    saveTemp f g = cp f (fromString g)
 
 reportStatus = echo . statusMsg
 
@@ -99,11 +104,13 @@ findForever :: (Show a, HasType a, T.Annot a)
 ---------------------------------------------------
 findForever pid st@(While l s)
   | alwaysContinues l s
-  = Just $ mkWhile (prolog pid) [prolog l, fromIceTStmt pid body]
+  = Just $ mkWhile (prolog pid) [ prolog l <> equals <> int 1
+                                , fromIceTStmt pid body
+                                ]
   | otherwise
   = Nothing
   where
-    assgn = Assgn l Nothing (T.EVar "false" T.dummyAnnot)
+    assgn = Assgn l Nothing (T.EVal (Just (T.CInt 0)) T.dummyAnnot)
     body = seqStmts [ assgn, s ]
 findForever pid (Seq ss)
   = findForever pid (last ss)
@@ -223,25 +230,27 @@ fromIceTStmt pid (Case e cases d)
   where
     pCases
       = goCase <$> cases
-    goCase ((T.ECon c xs l), s)
-      = mkCase ppid (fromIceTExpr pid e') (fromIceTStmt pid s')
-      where
-        s'  = foldl' (\s (x,x') -> substStmt x x' s) s (zip bs xs')
-        e'  = T.ECon c xs' l
-        bs  = T.varId <$> xs
-        xs' = [ T.EVar (liftCase v) l { isPatternVar = True } | v <- bs ]
+    goCase (pat@(T.ECon c xs l), s)
+      = mkCase ppid (fromIceTExpr pid pat) (fromIceTStmt pid s)
+      -- where
+        -- s'  = foldl' (\s (x,x') -> substStmt x x' s) s (zip bs xs')
+        -- e'  = T.ECon c xs' l
+        -- bs  = T.varId <$> xs
+        -- xs' = [ T.EVar v l { isPatternVar = True } | v <- bs ]
     defaultCase
       = (mkDefault ppid . fromIceTStmt pid) <$> d
     ppid = prolog pid
 
 fromIceTStmt pid (While l s)    
-  = mkSeq [ fromIceTStmt pid (assgn "true")
-          , mkWhile (prolog pid) [prolog l, fromIceTStmt pid body]
+  = mkSeq [ fromIceTStmt pid (assgn 1)
+          , mkWhile (prolog pid) [ prolog l <> equals <> int 1
+                                 , fromIceTStmt pid body
+                                 ]
           ]
   where
     a       = T.dummyAnnot
-    assgn b = Assgn l Nothing (T.EVar b a)
-    body    = seqStmts [ assgn "false", s ]
+    assgn b = Assgn l Nothing (T.EVal (Just (T.CInt b)) a)
+    body    = seqStmts [ assgn 0, s ]
 
 fromIceTStmt pid (Continue l)
   = mkAssign (prolog pid) [prolog l, mkTrue]
@@ -295,7 +304,7 @@ fromIceTExpr _ (T.EVar v l)
 fromIceTExpr _ (T.EType t _)
   = prolog t
 fromIceTExpr pid (T.ECon c [] _)
-  = prolog (cstrId c)
+  = compoundTerm (cstrId c) [prolog ("null___" :: String)]
 fromIceTExpr pid (T.ECon c es _)
   = compoundTerm (cstrId c) (fromIceTExpr pid <$> es)
 fromIceTExpr pid (T.ECase t e alts d l)
@@ -332,8 +341,8 @@ mkSym p set act = compoundTerm "sym" [p,set,act]
 mkSeq :: [Doc] -> Doc
 mkSeq ds = compoundTerm "seq" [listTerms ds]
 
-mkTrue  = text "true"
-mkFalse = text "false"
+mkTrue  = text "1"
+mkFalse = text "0"
          
 mkAssign :: Doc -> [Doc] -> Doc
 mkAssign = mkAction "assign" 2
@@ -417,8 +426,8 @@ instance Prolog String where
          . last
          . textNoDots
     where
-      repl '$'  = "_dll_"
-      repl '#'  = "_mh_"
+      repl '$'  = "dll__"
+      repl '#'  = "mh__"
       repl '\'' = "_"
       repl '.'  = "__"
       repl c    = [c]
