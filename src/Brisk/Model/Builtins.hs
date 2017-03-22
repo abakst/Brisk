@@ -9,6 +9,9 @@ import Brisk.Model.GhcInterface
 ($->$) b e = ELam b e ()
 infixr $->$
 
+($-->$) b e = ELam b e Nothing
+infixr $-->$
+
 ($>>=$) e1 e2 = EPrimOp Bind [e1,e2] ()
 ret e = EPrimOp Return [e] ()
 v x = EVar x ()
@@ -158,6 +161,26 @@ builtin = SpecTable [
               ) Nothing
           ) Nothing
       ) Nothing
+
+    , "Data.Traversable.forM"
+      :<=:
+      ("T" $-->$ "M"
+           $-->$ "B"
+           $-->$ "A"
+           $-->$ "xs"
+           $-->$ "f"
+           $-->$ EPrimOp FoldM [ "a" $-->$ "x" $-->$ 
+                                 EPrimOp Bind [
+                                   EApp (EVar "f" Nothing)
+                                   (EVar "x" Nothing)
+                                   Nothing
+                                 , "_" $-->$ EVal Nothing Nothing
+                                 ] Nothing
+                               , EAny (EType (TyVar "B") Nothing) Nothing
+                               , EVar "xs" Nothing
+                               ] Nothing
+      )
+                    
 
     , "Brisk.Annotations.top"
       :<=:
