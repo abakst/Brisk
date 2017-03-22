@@ -28,7 +28,7 @@ import System.Exit
 
 main :: IO ()
 main = do Check f b q <- getRecord "Brisk"
-          let binder = fromMaybe "main" b
+          let binder   = fromMaybe "main" b
           runBrisk f binder q
 
 data Brisk = Check { file   :: String
@@ -41,14 +41,14 @@ instance ParseRecord Brisk
 runBrisk :: String -> String -> Maybe String -> IO ()
 runBrisk fn fun msave
   = runGhc (Just libdir) $ do
-      hsc_env <- getSession
-      dflags  <- getSessionDynFlags
-      let dflags' = dflags { hscTarget         = HscInterpreted
-                           , ghcLink           = LinkInMemory
-                           , pluginModNames    = [plugMod]
-                           , packageFlags      = [distStatic]
-                           , verbosity         = 1
-                           }
+      hsc_env       <- getSession
+      dflags        <- getSessionDynFlags
+      let dflags'    = dflags { hscTarget      = HscInterpreted
+                              , ghcLink        = LinkInMemory
+                              , pluginModNames = [plugMod]
+                              , packageFlags   = [distStatic]
+                              , verbosity      = 1
+                              }
           plugMod    = mkModuleName "Brisk.Plugin"
           distStatic = ExposePackage "distributed-static"
                                      (PackageArg "distributed-static")
@@ -57,16 +57,16 @@ runBrisk fn fun msave
       setTargets [Target (TargetFile fn Nothing) False Nothing]
       liftIO $ putStrLn "Compiling..."
       load LoadAllTargets
-      mod <- topLevelModule hsc_env fn
+      mod        <- topLevelModule hsc_env fn
       let impDecl = simpleImportDecl mod
           qualImp = impDecl { ideclQualified = True }
           modNm   = moduleNameString mod
       liftIO $ putStrLn "Loading..."
       setContext [ IIDecl qualImp ]
-      hv     <- compileExpr (modNm `qualify` "brisk_tab__")
-      v      <- liftIO $ lessUnsafeCoerce dflags "runBrisk" hv
-      let st   = wordsToSpecTable v
-          effm = lookupTable (modNm `qualify` fun) st
+      hv         <- compileExpr (modNm `qualify` "brisk_tab__")
+      v          <- liftIO $ lessUnsafeCoerce dflags "runBrisk" hv
+      let st      = wordsToSpecTable v
+          effm    = lookupTable (modNm `qualify` fun) st
       liftIO $ case effm of
                  Nothing  -> do
                    putStrLn $ "Unknown name: " ++ fun

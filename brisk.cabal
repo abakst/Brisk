@@ -70,7 +70,7 @@ library
                      , turtle
                      , mtl
                      , pretty
-                     , hashable
+                     , hashable == 1.2.5.0
                      , unordered-containers
                      , text
                      , deepseq

@@ -52,7 +52,7 @@ substitute_term_avl(X1, X, AVL, AVL1) :-
 get_pairs([], []).
 get_pairs([S|Set], Pairs) :-
 	(   foreach(S1, Set),
-	    foreach((S,S1), SPairs),
+	    foreach((S-S1), SPairs),
 	    param(S)
 	do  true
 	),

@@ -84,8 +84,8 @@ template tmp
            ) tmp check
   where
     check = format ("("%s%", ("%s%"; halt("%d%")) ; halt("%d%")),") rf rw notDLFree notSND
-    rf = format ("catch(check_race_freedom(T,T1),_,halt("%d%")),!") 1
-    rw = format ("catch(rewrite(T1,R,_,_),_,halt("%d%"))") 1
+    rf = format ("catch(check_race_freedom(T,T1),_,halt("%d%")),!") notSND
+    rw = format ("catch(rewrite(T1,R,_,_),_,halt("%d%"))") notDLFree
     
 data BriskAnnot a = BriskAnnot { isPatternVar :: Bool
                                , annot        :: a
@@ -223,7 +223,10 @@ fromIceTStmt pid (Assgn x _ (T.ESymElt e _))
     ]
 
 fromIceTStmt pid (Assgn x _ e)
-  = mkAssign (prolog pid) [prolog x, fromIceTExpr pid e]
+  = mkAssign (prolog pid) [prolog var, fromIceTExpr pid e]
+  where
+    var | x == "_"  = "null"
+        | otherwise = x
 
 fromIceTStmt pid (Case e cases d)
   = mkCases (prolog pid) (fromIceTExpr pid e) pCases defaultCase
