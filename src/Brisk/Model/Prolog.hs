@@ -276,6 +276,9 @@ fromIceTStmt pid (ForEach x (False, xs) s)
 fromIceTStmt pid Fail
   = mkFail (prolog pid)
 
+fromIceTStmt pid s
+  = abort "fromIceTStmt" s
+
 fromIceTPid pid (T.EVal (Just (T.CPid p)) _)
   = compoundTerm "e_pid" [prolog p]
 fromIceTPid pid (T.EVar v l)
