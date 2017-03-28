@@ -26,6 +26,7 @@
 	   symset/2,      /* symset(p, S): process p belongs to the set of symmetric processes S. */
 	   in_remove/0,
 	   asserted/1,    /* asserted(cons): cons is valid. */
+	   in_for/0,
 	   max_delta/3.   /*
 	                     max_delta(Max, T, Delta): max is the length of delta,
 	                     the longest prefix that occurred in any rewrite-step so far.
@@ -252,17 +253,21 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	  assert(asserted(prop_subset(emp, S1))),
 	  assert(asserted(subset(S1, S))),
 	  assert(asserted(element(Proc, S1))),
-          TA=par([A1, sym(Q, S1, B)]),
-	  (   TB=par([sym(Q, set_minus(S1, Proc1), B), C])
-	  ;   TB=sym(Q, set_minus(S1, Proc1), B),
-	      C=skip
-	  ),
-	  rewrite(TA, Gamma, [], Rho, Psi, TB, Gamma, Delta2, Rho2, Psi2) ->
-%	  Delta2=DEBUG,
+	  substitute_term(Proc, P, Rho, Rho2),
+	  mk_pair(A1, sym(Q, S1, B), TA, Switched),
+	  mk_pair(skip, par(sym(Q, set_minus(S1, Proc1), B), C), TB, Switched),
+	  assert(in_for),
+	  (   rewrite(TA, Gamma, [], Rho2, Psi, TB, Gamma, Delta2, Rho3, Psi2)
+	  ;   retractall(in_for),
+	      fail
+	  )->
+	  retractall(in_for),
 	  clear_talkto,
 	  substitute_term(Q, Proc1, C, C1),
-          replace_proc_id(S, Proc1, Rho2, Rho1),
-	  T1=par(skip, sym(Q, S, C1)),
+          replace_proc_id(S, Proc1, Rho3, Rho4),
+	  substitute_term(P, Proc, Rho4, Rho5),
+	  substitute_term(S, Proc1, Rho5, Rho1),
+	  mk_pair(skip, sym(Q,S,C1), T1, Switched),
 	  Gamma1=Gamma,
           substitute_term(P, Proc1, Delta2, Delta3),
 	  append(Delta, [for(P, S ,Delta3)], Delta1),
@@ -320,18 +325,18 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
           (   foreach(case(P, Exp, A), Cs),
 	      foreach(case(P, Exp, CDelta), CDeltas),
 	      fromto(full_avl, In, Out, Rho1),
-	      param([X,D,C,Gamma,Rho,Psi,Gamma2, Switched, Pair1])
+	      param([X,D,C,Gamma,Rho,Psi,Psi1,Gamma2, Switched, Pair1])
 	  do  T2=seq([assign(P,X,Exp),A|C]),
 	      mk_pair(T2, D, Pair, Switched),
 	      /* rewrite one component to skip */
 	      contains_skip(Pair1),
-	      rewrite(Pair, Gamma, [], Rho, Psi, Pair1, Gamma2, CDelta, Rho2, Psi),
+	      rewrite(Pair, Gamma, [], Rho, Psi, Pair1, Gamma2, CDelta, Rho2, Psi1),
 	      intersect_avl(In, Rho2, Out)
 	  )->
           append(Delta, [cases(P, X, CDeltas)], Delta1),
 	  Gamma1=Gamma2,
-          unswitch_pair(Pair1, Switched, T1),
-	  Psi1=Psi
+	  T1=Pair1
+%	  Psi1=Psi
 	/*
 	================
 	sym-repeat
@@ -350,6 +355,7 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	  TA1=par(sym(P, set_minus(S, Proc), A), AProc),
 	  mk_pair(skip, TA1, T2, Switched),
 	  \+in_remove,
+	  \+in_for,
 	  assert(in_remove),
 	  ( %rewrite(par(B, TA), Gamma, [], Rho, Psi, par(skip, TA1), Gamma, Delta2, Rho2, Psi2)
 	      rewrite(T, Gamma, [], Rho, Psi, T2, Gamma, Delta2, Rho2, Psi2)
@@ -392,12 +398,22 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	  Sym=sym(Q, S, A),
 	  nonvar(P),
 	  is_valid(element(P, S))->
+	  assert(symset(P, S)),
 	  copy_instantiate(A, Q, P, AP),
 	  set_talkto(M, P),
 	  Sym1=par(sym(Q, set_minus(S,P), A), AP),
 	  mk_pair(Send, Sym1, T1, Switched),
 %	  T1=par(Send, Sym1),
-	  replace_proc_id(P, S, Rho, Rho1),
+	  replace_proc_id(P, S, Rho, Rho2),
+	  /* Instantiate assignments for all supersets. */
+	  (   findall(S1, (is_valid(subset(S, S1)),S\==S1), Subsets)->
+	      (   foreach(S1, Subsets),
+		  fromto(Rho2, In, Out, Rho1),
+		  param([P,S])
+	      do  replace_proc_id(P, S1, In, Out)
+	      )
+	  ;   true
+	  ),
 	  Gamma1=Gamma,
 	  Delta1=Delta,
 	  Psi1=Psi
@@ -465,6 +481,7 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 %           mk_pair(TB1, A, T2, Switched),
            T2=par(TB1, A),
            \+in_remove,
+           \+in_for,
 	  assert(in_remove),
            (   rewrite(T, Gamma, [], Rho, Psi, T2, Gamma, Delta2, Rho2, Psi2)
            ;   retractall(in_remove),
@@ -484,8 +501,13 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
            (   avl_delete(Proc1, Psi2, Ext0, Psi3) ->
 	       substitute_term(P, Proc1, Ext0, Ext),
 	       add_external(Psi3, sym(P, S, seq(Ext)), S, Psi1)
+	   ;   get_proc(A, M),
+	       avl_delete(M, Psi2, Ext0, Psi3) ->
+	       substitute_term(P, Proc1, Ext0, Ext),
+	       add_external(Psi3, iter(M, S, seq(Ext)), M, Psi1)
 	   ;   Psi1=Psi
 	   )
+
 	/*
 	send(p, x, v)
 	*/
@@ -694,6 +716,33 @@ cleanup_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	  Rho1=Rho,
 	  Psi1=Psi
 	/*
+	for(M, P, S, A): reduce A.
+	*/
+	; functor(T, for, 4),
+	  T=for(M, P, S, A),
+	  make_instance(Proc),
+	  replace_proc_id(Proc, S, Rho, Rho2),
+	  copy_instantiate(A, P, Proc, A1),
+	  assert(symset(Proc, S)),
+	  assert(asserted(element(Proc, S))),
+	  empty_avl(Emp),
+	  rewrite(A1, Gamma, [], Rho2, Emp, skip, Gamma, Delta2, Rho3, PsiA) ->
+	  substitute_term(P, Proc, B, B1),
+	  T1=skip,
+	  replace_proc_id(S, Proc, Rho3, Rho4),
+	  substitute_term(P, Proc, Rho4, Rho1),
+	  Gamma1=Gamma,
+	  (   Delta2 == [] ->
+	      Delta1=Delta
+	  ;   substitute_term(P, Proc, Delta2, Delta3),
+	      append(Delta, [for(P, S ,Delta3)], Delta1)
+	  ),
+	  (   avl_delete(M, PsiA, Ext0, _) ->
+	      substitute_term(P, Proc, Ext0, Ext),
+	      add_external(Psi, for(M, P, S, seq(Ext)), M, Psi1)
+	  ;   Psi1=Psi
+	  )
+	/*
 	sym(P, S, A): reduce A in sym(P, S, A)
 	*/
 	; functor(T, sym, 3),
@@ -778,7 +827,8 @@ cleanup_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	  T=par(L),
 	  select(A, L, Rest),
 	  cleanup_step(A, Gamma, Delta, Rho, Psi, A1, Gamma1, Delta1, Rho1, Psi1)->
-	  T1=par([A1|Rest])
+	  select(A, L, A1, L1),
+	  T1=par(L1)
 	).
 
 update_max_delta(T, Delta) :-
@@ -903,6 +953,8 @@ propagate_const(P, X, Rho, X1) :-
 	assignments for its subterms.
 	*/
 	(   nonvar(X),
+	    /*Process name can't occur as var.*/
+	    X\==P, 
 	    avl_member(P-X, Rho, X2)->
 	    (   simple(X2) ->
 		X1=X2
@@ -1016,20 +1068,23 @@ match_case(P, X, Cases, Rho, Rho1, Res) :-
 	),
 	update_const_match(P, X1, Exp, Rho, Rho1).
 
-
-
-
 is_valid(T) :-
 	/*
 	If it is in the basic set of axioms or was asserted.
 	*/
 	(  T=subset(S,S)
 	;  T=prop_subset(emp,_)
+	;  T=element(P, S),
+	   asserted(element(P, S1)),
+	   asserted(subset(S1, S))
 	;  asserted(T)
 	).
 
 check_independent(P, Q) :-
-	(   symset(P, S)->
+	(   symset(P, S),
+	    symset(Q, S1)->
+	    tags_independent(S, S1)
+	;   symset(P, S)->
 	    tags_independent(S, Q)
 	;   symset(Q, S)->
 	    tags_independent(P, S)

@@ -45,7 +45,7 @@ data IceTProcess_ b a = Single  ProcessId (IceTStmt a)
                      deriving (Show, Eq)
 type IceTProcess = IceTProcess_ E.Id
 
-data IceTState a = IS { current   :: Char
+data IceTState a = IS { current   :: E.EffExpr E.Id a
                       , next      :: Char
                       , loopCounter :: Int
                       , recFns    :: [(E.Id,E.Id, [E.Id])]
@@ -165,7 +165,7 @@ runIceT e
   <$> (Single "a" stmt : par st)
   where
     aPid            = E.EVal (Just (E.CPid "a")) E.dummyAnnot
-    ((stmt, _), st) = runState (fromTopEffExp e) (IS 'a' 'b' 0 [] [] [] [])
+    ((stmt, _), st) = runState (fromTopEffExp e) (IS aPid 'b' 0 [] [] [] [])
 
 mapProcStmt :: (IceTStmt a -> IceTStmt a) -> IceTProcess a -> IceTProcess a
 mapProcStmt f (Single p s)      = Single p (f s)
@@ -272,7 +272,7 @@ fromEffExp s (E.EPrRec acc x body acc0 xs l) mx
 
 fromEffExp s (E.EPrimOp E.Self [] l) _
   = do me <- gets current
-       return (Skip, Just (E.EVar [me] (setType ty l)))
+       return (Skip, Just me { E.annot = setType ty l })
          where
            go (E.TyConApp _ [t]) = t
            ty                    = go <$> getType l
@@ -466,10 +466,10 @@ fromSpawn :: (Show a, HasType a, E.Annot a)
 ---------------------------------------------------
 fromSpawn l s p x
   = do them <- newPidM
-       withCurrentM them $ do
+       let pid = E.EVal (Just (E.CPid [them])) l
+       withCurrentM pid $ do
          (pSpawn, _) <- fromEffExp s p x
          let pSpawn' = substStmt [them] pid pSpawn
-             pid     = E.EVal (Just (E.CPid [them])) l
          addProcessM (Single [them] pSpawn')
          return $ (Skip, Just pid)
 
@@ -486,7 +486,8 @@ fromSymSpawn l s xs p x
   = do me     <- gets current
        them   <- newPidM
        let themSet = them : "_Set"
-       withCurrentM (toUpper them) $ do
+           themPid = E.EVar [toUpper them] l
+       withCurrentM themPid $ do
          (pSpawn, _) <- fromEffExp s p Nothing
          addProcessM (ParIter [toUpper them] themSet pSpawn)
          let l' = setType (Just $ E.TyConApp "Control.Distributed.Process.SymmetricProcess.SymProcessSet" []) l
@@ -505,7 +506,7 @@ addProcessM :: IceTProcess a -> ITM a ()
 addProcessM p
   = modify $ \s -> s { par = p : par s }
 
-withCurrentM :: Char -> ITM a b -> ITM a b
+withCurrentM :: E.EffExpr E.Id a -> ITM a b -> ITM a b
 withCurrentM p act = do q <- gets current
                         modify $ \s -> s { current = p }                   
                         r <- act

@@ -169,10 +169,10 @@ builtin = SpecTable [
            $-->$ "A"
            $-->$ "xs"
            $-->$ "f"
-           $-->$ EPrimOp FoldM [ "a" $-->$ "x" $-->$ 
+           $-->$ EPrimOp FoldM [ "$a" $-->$ "$x" $-->$ 
                                  EPrimOp Bind [
                                    EApp (EVar "f" Nothing)
-                                   (EVar "x" Nothing)
+                                   (EVar "$x" Nothing)
                                    Nothing
                                  , "_" $-->$ EVal Nothing Nothing
                                  ] Nothing

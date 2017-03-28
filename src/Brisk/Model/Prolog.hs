@@ -2,9 +2,11 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE TypeSynonymInstances #-}
+{-# LANGUAGE ImplicitParams #-}
 module Brisk.Model.Prolog where
 
 import           Name
+import           GHC.Stack
 import           OccName
 import           Text.PrettyPrint.HughesPJ hiding (empty)
 import           Control.Exception
@@ -190,7 +192,8 @@ pullCaseAssignStmt s
   = s
 
 ---------------------------------------------------
-fromIceTStmt :: (Show a, HasType a, T.Annot a) => ProcessId -> IceTStmt (BriskAnnot a) -> Doc
+fromIceTStmt :: (?callStack :: CallStack, Show a, HasType a, T.Annot a)
+             => ProcessId -> IceTStmt (BriskAnnot a) -> Doc
 ---------------------------------------------------
 fromIceTStmt pid s@(Seq _)
   = mkSeq (fromIceTStmt pid <$> ss)
@@ -291,7 +294,7 @@ fromIceTPidSet pid e
   = mkPidSet (fromIceTExpr pid e)
 
 ---------------------------------------------------
-fromIceTExpr :: (Show a, HasType a)
+fromIceTExpr :: (?callStack :: CallStack, Show a, HasType a)
              => ProcessId -> IceTExpr (BriskAnnot a) -> Doc
 ---------------------------------------------------
 fromIceTExpr _ (T.EVal (Just (T.CInt i)) _)
@@ -300,6 +303,8 @@ fromIceTExpr _ (T.EVal (Just (T.CPid p)) _)
   = prolog p
 fromIceTExpr _ (T.EVal (Just (T.CPidSet ps)) _)
   = prolog ps
+fromIceTExpr _ (T.EVal Nothing _)
+  = prolog ("ndet" :: String)
 fromIceTExpr _ (T.EAny t l)
   = prolog ("ndet" :: String)
 fromIceTExpr _ (T.EVar v l)
