@@ -9,6 +9,7 @@ import           Name
 import           GHC.Stack
 import           OccName
 import           Text.PrettyPrint.HughesPJ hiding (empty)
+import qualified Text.PrettyPrint.HughesPJ as Doc
 import           Control.Exception
 import           Data.Char
 import           Data.List
@@ -136,8 +137,9 @@ toBriskString = render . fst . toBrisk
 ---------------------------------------------------
 toBrisk :: (Show a, HasType a, T.Annot a) => T.EffExpr T.Id a -> (Doc, Doc)
 ---------------------------------------------------
-toBrisk e = fromIceT (runIceT (fmap toBriskAnnot e))
+toBrisk e = fromIceT procs
   where
+    (_, procs)    = runIceT (toBriskAnnot <$> e)
     toBriskAnnot a = BriskAnnot False a
 
 ---------------------------------------------------
@@ -225,6 +227,10 @@ fromIceTStmt pid (Assgn x _ (T.ESymElt e _))
        , mkAssign (prolog pid) [prolog x, prolog (liftCase x) ]
     ]
 
+fromIceTStmt pid (Assgn x _ (T.EVal Nothing _))
+  = Doc.empty
+fromIceTStmt pid (Assgn x _ (T.EAny _ _))
+  = Doc.empty
 fromIceTStmt pid (Assgn x _ e)
   = mkAssign (prolog pid) [prolog var, fromIceTExpr pid e]
   where
@@ -350,7 +356,11 @@ mkSym :: Doc -> Doc -> Doc -> Doc
 mkSym p set act = compoundTerm "sym" [p,set,act]
 
 mkSeq :: [Doc] -> Doc
-mkSeq ds = compoundTerm "seq" [listTerms ds]
+mkSeq ds  = mkSeq' [ d | d <- ds, d /= Doc.empty ]
+  where
+    mkSeq' []  = mkSkip
+    mkSeq' [d] = d
+    mkSeq' ds  = compoundTerm "seq" [listTerms ds]
 
 mkTrue  = text "1"
 mkFalse = text "0"

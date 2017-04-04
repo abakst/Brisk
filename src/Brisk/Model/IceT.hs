@@ -50,6 +50,7 @@ data IceTState a = IS { current   :: E.EffExpr E.Id a
                       , loopCounter :: Int
                       , recFns    :: [(E.Id,E.Id, [E.Id])]
                       , par       :: [IceTProcess a]
+                      , spawnParams :: [(IceTExpr a, ProcessId)]
                       , params    :: [E.Id]
                       , paramSets :: [(E.Id, IceTExpr a)]
                       }
@@ -158,14 +159,14 @@ simplifySkips (Seq ss) = Seq ss'
         isSkip Skip = True
         isSkip _    = False
 
-runIceT :: (Show a, HasType a, E.Annot a) => IceTExpr a -> [IceTProcess a]
-runIceT e
-  =   anormalizeProc
-   .  mapProcStmt (substStmt "a" aPid)
-  <$> (Single "a" stmt : par st)
+runIceT :: (Show a, HasType a, E.Annot a) => IceTExpr a -> (IceTState a, [IceTProcess a])
+runIceT e = (st, procs)
   where
+    procs           = anormalizeProc
+                    . mapProcStmt (substStmt "a" aPid)
+                   <$> (Single "a" stmt : par st)
     aPid            = E.EVal (Just (E.CPid "a")) E.dummyAnnot
-    ((stmt, _), st) = runState (fromTopEffExp e) (IS aPid 'b' 0 [] [] [] [])
+    ((stmt, _), st) = runState (fromTopEffExp e) (IS aPid 'b' 0 [] [] [] [] [])
 
 mapProcStmt :: (IceTStmt a -> IceTStmt a) -> IceTProcess a -> IceTProcess a
 mapProcStmt f (Single p s)      = Single p (f s)
@@ -259,7 +260,7 @@ fromEffExp s (E.ELet x e1 e2 l) mx
 
 fromEffExp s (E.EPrRec acc x body acc0 xs l) mx
   = do (stmt, _) <- fromEffExp s' body (Just acc)
-       exs       <- fromPure s xs
+       exs       <- replaceSpawnParam =<< fromPure s xs
        a0        <- fromPure s acc0
        return (foreach stmt (isPidSet exs, exs) a0, Nothing)
   where
@@ -267,6 +268,7 @@ fromEffExp s (E.EPrRec acc x body acc0 xs l) mx
     foreach s exs a0 = seqStmts [ Assgn acc (getType a0) a0
                                 , ForEach x exs s
                                 ]
+    isPidSet (E.EVal (Just (E.CPidSet _)) _) = True
     isPidSet e = getType e
               == Just (E.TyConApp "Control.Distributed.Process.SymmetricProcess.SymProcessSet" []) -- Ugh
 
@@ -485,11 +487,13 @@ fromSymSpawn :: (Show a, HasType a, E.Annot a)
 fromSymSpawn l s xs p x
   = do me     <- gets current
        them   <- newPidM
+       param  <- fromPure s xs
        let themSet = them : "_Set"
            themPid = E.EVar [toUpper them] l
        withCurrentM themPid $ do
          (pSpawn, _) <- fromEffExp s p Nothing
          addProcessM (ParIter [toUpper them] themSet pSpawn)
+         addParamM param themSet
          let l' = setType (Just $ E.TyConApp "Control.Distributed.Process.SymmetricProcess.SymProcessSet" []) l
          return (Skip, Just (E.EVal (Just (E.CPidSet themSet)) l'))
 
@@ -506,12 +510,26 @@ addProcessM :: IceTProcess a -> ITM a ()
 addProcessM p
   = modify $ \s -> s { par = p : par s }
 
+addParamM :: IceTExpr a -> ProcessId -> ITM a ()
+addParamM e p
+  = modify $ \s -> s { spawnParams = (e,p) : spawnParams s }
+
 withCurrentM :: E.EffExpr E.Id a -> ITM a b -> ITM a b
 withCurrentM p act = do q <- gets current
                         modify $ \s -> s { current = p }                   
                         r <- act
                         modify $ \s -> s { current = q }
                         return r
+
+replaceSpawnParam :: IceTExpr a -> ITM a (IceTExpr a)
+replaceSpawnParam e@(E.EVar x l)
+  = do ps <- gets spawnParams
+       let matches = [ p | (E.EVar x' _, p) <- ps, x == x' ]
+       case matches of
+         [p] -> return (E.EVal (Just (E.CPidSet p)) l)
+         _   -> return e
+replaceSpawnParam e
+  = return e
 
 ---------------------------------------------------
 fromBind :: (Show a, HasType a, E.Annot a)

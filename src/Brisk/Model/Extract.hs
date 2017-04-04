@@ -115,7 +115,7 @@ runMGen bs hsenv mg specs@(SpecTable speccies) prog
            brisk = filter ((`elem` ns) . fst) all
        -- dumpBinds all
        dumpBinds brisk
-       forM_ brisk (putStrLn . render . PP.vcat . fmap pp . runIceT . snd)
+       forM_ brisk (putStrLn . render . PP.vcat . fmap pp . snd . runIceT . snd)
        forM_ brisk (putStrLn . toBriskString . snd)
        return $ SpecTable [ x :<=: e | (x,e) <- all ]
   where

@@ -40,6 +40,19 @@ import Data.Word
 import GHC.Word
 import Debug.Trace
 
+import Data.IORef
+import System.IO.Unsafe
+import System.Random
+
+-----------------------------------------------  
+nextStr :: String -> IO String
+-----------------------------------------------  
+nextStr s = do
+  c0 <- randomRIO ('a', 'z')
+  c1 <- randomRIO ('a', 'z')
+  d  <- randomRIO (0, 9)
+  return (s ++ [c0,c1,intToDigit d])
+
 type Id = String                 
 
 -----------------------------------------------  
@@ -304,9 +317,9 @@ substAlt :: (Avoid b, Annot a, Ord b)
 substAlt x a (c, bs, e) = (c, bs', subst x a e')  
   where
     (bs', e')    = foldr go ([], e) bs
-    go b (bs, e) = (b':bs, substExpr True b (EVar b' dummyAnnot) e)
-      where
-        b' = avoid (fv e) b
+    go b (bs, e) =
+      let b' = avoid (fv a) b in
+      (b':bs, substExpr True b (EVar b' dummyAnnot) e)
 
 
 conEffExpr :: Annot a => a -> T.Type -> DataCon -> EffExpr Id a  
@@ -555,8 +568,10 @@ class Annot a where
 
 instance Avoid Id where
   avoid fvs x
-    | Set.member x fvs = avoid fvs (x ++ "'")
-    | otherwise        = x
+    | Set.member x fvs
+    = let s = unsafePerformIO $ nextStr x in avoid fvs s
+    | otherwise
+    = x
 
 instance Annot () where
   dummyAnnot = ()
