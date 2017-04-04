@@ -299,7 +299,15 @@ unfoldRec :: Subst b (EffExpr b a) => EffExpr b a -> EffExpr b a
 unfoldRec m@(ERec b e l)
   = subst b m e
 
-substAlt x a (c, bs, e) = (c, bs, subst x a e)  
+substAlt :: (Avoid b, Annot a, Ord b)
+         => b -> EffExpr b a -> (b, [b], EffExpr b a) -> (b, [b], EffExpr b a)
+substAlt x a (c, bs, e) = (c, bs', subst x a e')  
+  where
+    (bs', e')    = foldr go ([], e) bs
+    go b (bs, e) = (b':bs, substExpr True b (EVar b' dummyAnnot) e)
+      where
+        b' = avoid (fv e) b
+
 
 conEffExpr :: Annot a => a -> T.Type -> DataCon -> EffExpr Id a  
 conEffExpr l t d

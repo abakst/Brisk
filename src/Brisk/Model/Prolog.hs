@@ -436,7 +436,11 @@ instance Prolog String where
          . (concatMap repl)
          . last
          . textNoDots
+         . fixupFirst
     where
+      fixupFirst ('_':str) = ("v_" ++ str)
+      fixupFirst s         = s
+
       repl '$'  = "dll__"
       repl '#'  = "mh__"
       repl '\'' = "_"

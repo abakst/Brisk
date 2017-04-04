@@ -162,11 +162,13 @@ mGenBind g (NonRec x b)
 mGenBind g (Rec [(f,e)])
   = do let g' = Env.insert g n guess
        a <- mGenExpr g' e
-       return (Env.insert g n (ERec n a (annotOfBind f)))
+       return (Env.insert g n (etaExp $ ERec n a (annotOfBind f)))
          where
-           (bs,_)  = collectBinders e
-           bes     = [ EVar (bindId x) (annotOfBind x) | x <- bs, not (isDictId x) ]
-           guess   = foldr go (foldl go' (var n (annotOfBind f)) bes) bes
+           (bs,_)   = collectBinders e
+           bes      = [ EVar (bindId x) (annotOfBind x) | x <- bs, not (isDictId x) ]
+           -- guess    = foldr go (foldl go' (var n (annotOfBind f)) bes) bes
+           guess    = etaExp $ var n (annotOfBind f)
+           etaExp e = foldr go (foldl go' e bes) bes
            n       = bindId f
            go (EVar x l) a  = ELam x a l
            go' a x = EApp a x (annotOfBind f)
