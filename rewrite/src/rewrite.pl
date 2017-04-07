@@ -1127,7 +1127,16 @@ rewrite(T, Rem, seq(Delta1), Rho1) :-
 	empty_avl(Gamma),
 	empty_avl(Rho),
 	empty_avl(Psi),
-	rewrite(T, Gamma, Delta, Rho, Psi, Rem, Gamma, Delta1, Rho1, Psi).
+        current_output(Out),
+        open_null_stream(Null),
+        set_output(Null),
+        statistics(runtime, [Time0|_]),
+	rewrite(T, Gamma, Delta, Rho, Psi, Rem, Gamma, Delta1, Rho1, Psi),
+        statistics(runtime, [Time1|_]),
+        Time is (Time1-Time0),
+        set_output(Out),
+        format('rewrite in: ~dms~n', [Time]),
+        set_output(Null).
 
 rewrite_debug(T, Rem, _, _, Delta1, Rho1) :-
 	(   rewrite(T, Rem, Delta1, Rho1) ->

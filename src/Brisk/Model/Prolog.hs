@@ -44,7 +44,7 @@ runRewriter e mdest
                               % " --goal "    % w
                               % " --noinfo --nologo "
                               % "2>/dev/null "
-                              % "1>/dev/null "
+                              -- % "1>/dev/null "
                               ) (fromString rw) query
          output tmp (select $ textToLines rwquery)
          l <- select $ textToLines cmd

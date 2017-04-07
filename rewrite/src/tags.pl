@@ -310,6 +310,6 @@ tag_term(T, T2)	:-
 
 check_race_freedom(T, T2) :-
 	tag_term(T, T1),
-	portray_clause(T1),
+/*	portray_clause(T1), */
 	check_tags(T1),
 	untag_add_receive_from(T1, T2).
