@@ -26,7 +26,7 @@
 	   symset/2,      /* symset(p, S): process p belongs to the set of symmetric processes S. */
 	   in_remove/0,
 	   asserted/1,    /* asserted(cons): cons is valid. */
-	   in_for/0,
+     in_for/0,
 	   max_delta/3.   /*
 	                     max_delta(Max, T, Delta): max is the length of delta,
 	                     the longest prefix that occurred in any rewrite-step so far.
@@ -322,17 +322,26 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	  ),
           \+match_case(P, X, Cs, Rho, _, _),
           atomic(X),
+	  empty_avl(Psi),
           (   foreach(case(P, Exp, A), Cs),
 	      foreach(case(P, Exp, CDelta), CDeltas),
 	      fromto(full_avl, In, Out, Rho1),
-	      param([X,D,C,Gamma,Rho,Psi,Psi1,Gamma2, Switched, Pair1])
+	      param([X,D,C,Gamma,Rho,Psi,Gamma2, Switched, Pair1])
 	  do  T2=seq([assign(P,X,Exp),A|C]),
 	      mk_pair(T2, D, Pair, Switched),
 	      /* rewrite one component to skip */
 	      contains_skip(Pair1),
-	      rewrite(Pair, Gamma, [], Rho, Psi, Pair1, Gamma2, CDelta, Rho2, Psi1),
+	      rewrite(Pair, Gamma, [], Rho, empty, Pair1, Gamma2, CDelta, Rho2, Psi2),
+	      (   empty_avl(Psi2)->
+		  true
+	      ;   Psi2=Psi1
+	      ),
 	      intersect_avl(In, Rho2, Out)
 	  )->
+	  (   var(Psi1)->
+	      empty_avl(Psi1)
+	  ;   true
+	  ),
           append(Delta, [cases(P, X, CDeltas)], Delta1),
 	  Gamma1=Gamma2,
 	  T1=Pair1
@@ -509,6 +518,46 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	   )
 
 	/*
+	; functor(T, for, 4),
+	  T=for(M, P, S, A),
+	  make_instance(Proc),
+	  replace_proc_id(Proc, S, Rho, Rho2),
+	  copy_instantiate(A, P, Proc, A1),
+	  assert(symset(Proc, S)),
+	  assert(asserted(element(Proc, S))),
+	  empty_avl(Emp),
+	  rewrite(A1, Gamma, [], Rho2, Emp, skip, Gamma, Delta2, Rho3, PsiA) ->
+	  substitute_term(P, Proc, B, B1),
+	  T1=skip,
+	  replace_proc_id(S, Proc, Rho3, Rho4),
+	  substitute_term(P, Proc, Rho4, Rho1),
+	  Gamma1=Gamma,
+	  (   Delta2 == [] ->
+	      Delta1=Delta
+	  ;   substitute_term(P, Proc, Delta2, Delta3),
+	      append(Delta, [for(P, S ,Delta3)], Delta1)
+	  ),
+	  (   avl_delete(M, PsiA, Ext0, _) ->
+	      substitute_term(P, Proc, Ext0, Ext),
+	      add_external(Psi, for(M, P, S, seq(Ext)), M, Psi1)
+	  ;   Psi1=Psi
+	  )
+	/*
+	Reduce cases
+	*/
+	; functor(T, cases, 4),
+	  T=cases(P, X, Cs, skip),
+	  (   foreach(case(P, Exp, A), Cs),
+	      foreach([assign(P, X, Exp)|Delta2], Deltas),
+	      fromto(full_avl, In, Out, Rho1),
+	      param([T,P,X,Gamma,Delta,Rho,Psi])
+	  do rewrite(A, Gamma, Delta, Rho, Psi, skip, Gamma, Delta2, Rho2, Psi)->
+	      intersect_avl(In, Rho2, Out)
+	  )->
+	  append(Delta, [cases(P, X, Deltas)], Delta1),
+	  T1=skip,
+	  Gamma1=Gamma, 
+	  Psi1=Psi
 	send(p, x, v)
 	*/
 	; parse_send(T, Rho, P, Q, Type, V),
@@ -690,19 +739,6 @@ cleanup_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	/*
 	Reduce cases
 	*/
-	; functor(T, cases, 4),
-	  T=cases(P, X, Cs, skip),
-	  (   foreach(case(P, Exp, A), Cs),
-	      foreach([assign(P, X, Exp)|Delta2], Deltas),
-	      fromto(full_avl, In, Out, Rho1),
-	      param([T,P,X,Gamma,Delta,Rho,Psi])
-	  do  rewrite(A, Gamma, Delta, Rho, Psi, skip, Gamma, Delta2, Rho2, Psi)->
-	      intersect_avl(In, Rho2, Out)
-	  )->
-	  append(Delta, [cases(P, X, Deltas)], Delta1),
-	  T1=skip,
-	  Gamma1=Gamma, 
-	  Psi1=Psi
 	/*
 	while(p, cond, A): remove while if cond doesn't hold.
 	*/
@@ -718,30 +754,6 @@ cleanup_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	/*
 	for(M, P, S, A): reduce A.
 	*/
-	; functor(T, for, 4),
-	  T=for(M, P, S, A),
-	  make_instance(Proc),
-	  replace_proc_id(Proc, S, Rho, Rho2),
-	  copy_instantiate(A, P, Proc, A1),
-	  assert(symset(Proc, S)),
-	  assert(asserted(element(Proc, S))),
-	  empty_avl(Emp),
-	  rewrite(A1, Gamma, [], Rho2, Emp, skip, Gamma, Delta2, Rho3, PsiA) ->
-	  substitute_term(P, Proc, B, B1),
-	  T1=skip,
-	  replace_proc_id(S, Proc, Rho3, Rho4),
-	  substitute_term(P, Proc, Rho4, Rho1),
-	  Gamma1=Gamma,
-	  (   Delta2 == [] ->
-	      Delta1=Delta
-	  ;   substitute_term(P, Proc, Delta2, Delta3),
-	      append(Delta, [for(P, S ,Delta3)], Delta1)
-	  ),
-	  (   avl_delete(M, PsiA, Ext0, _) ->
-	      substitute_term(P, Proc, Ext0, Ext),
-	      add_external(Psi, for(M, P, S, seq(Ext)), M, Psi1)
-	  ;   Psi1=Psi
-	  )
 	/*
 	sym(P, S, A): reduce A in sym(P, S, A)
 	*/
@@ -1127,16 +1139,7 @@ rewrite(T, Rem, seq(Delta1), Rho1) :-
 	empty_avl(Gamma),
 	empty_avl(Rho),
 	empty_avl(Psi),
-        current_output(Out),
-        open_null_stream(Null),
-        set_output(Null),
-        statistics(runtime, [Time0|_]),
-	rewrite(T, Gamma, Delta, Rho, Psi, Rem, Gamma, Delta1, Rho1, Psi),
-        statistics(runtime, [Time1|_]),
-        Time is (Time1-Time0),
-        set_output(Out),
-        format('rewrite in: ~dms~n', [Time]),
-        set_output(Null).
+	rewrite(T, Gamma, Delta, Rho, Psi, Rem, Gamma, Delta1, Rho1, Psi).
 
 rewrite_debug(T, Rem, _, _, Delta1, Rho1) :-
 	(   rewrite(T, Rem, Delta1, Rho1) ->
