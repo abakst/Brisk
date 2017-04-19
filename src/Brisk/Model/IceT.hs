@@ -74,7 +74,7 @@ queryMsgTys f g
 substStmt :: (E.Annot a) => E.Id -> IceTExpr a -> IceTStmt a -> IceTStmt a
 substStmt x e = go
   where
-    sub                = E.subst x e 
+    sub                = E.subst [(x, e)] 
     go (Send t p m)    = Send t (sub p) (sub m) 
     go (Assgn x t e)   = Assgn x t (sub e)
     go (Seq ss)        = Seq (go <$> ss)
@@ -164,7 +164,7 @@ runIceT e = (st, procs)
   where
     procs           = anormalizeProc
                     . mapProcStmt (substStmt "a" aPid)
-                   <$> (Single "a" stmt : par st)
+                  <$> (Single "a" stmt : par st)
     aPid            = E.EVal (Just (E.CPid "a")) E.dummyAnnot
     ((stmt, _), st) = runState (fromTopEffExp e) (IS aPid 'b' 0 [] [] [] [] [])
 

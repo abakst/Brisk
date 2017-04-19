@@ -302,7 +302,7 @@ mGenApp g e@ECon {} (EType _ _)
 mGenApp g e@ECon {} a
   = return $ simplify (e `apConEff` a)
 mGenApp g a@(ELam x m _) a2
-  = return . simplify $ subst x a2 m
+  = return . simplify $ subst [(x, a2)] m
   -- = do ELam x a1 _ <- alphaRename (fv a2) a
   --      return . simplify . subst x a2 $ a1
 mGenApp _ a1@(ERec f _ l) a2
@@ -318,7 +318,7 @@ mGenApp _ e1 e2
 
 substIf :: Id -> Set.Set Id -> AbsEff -> AbsEff -> AbsEff
 substIf x xs a
-  | x `Set.member` xs = subst x a
+  | x `Set.member` xs = subst [(x, a)]
   | otherwise         = id
 
 var :: Id -> a -> EffExpr Id a

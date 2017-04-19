@@ -518,6 +518,8 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	   )
 
 	/*
+	for(M, P, S, A): reduce A.
+	*/
 	; functor(T, for, 4),
 	  T=for(M, P, S, A),
 	  make_instance(Proc),
@@ -558,6 +560,8 @@ rewrite_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	  T1=skip,
 	  Gamma1=Gamma, 
 	  Psi1=Psi
+
+	/*
 	send(p, x, v)
 	*/
 	; parse_send(T, Rho, P, Q, Type, V),
@@ -736,10 +740,7 @@ cleanup_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	  T1=A,
 	  Gamma1=Gamma, Delta1=Delta,
 	  Psi1=Psi
-	/*
-	Reduce cases
-	*/
-	/*
+	/*Reduce
 	while(p, cond, A): remove while if cond doesn't hold.
 	*/
 	; functor(T, while, 3),
@@ -751,9 +752,6 @@ cleanup_step(T, Gamma, Delta, Rho, Psi, T1, Gamma1, Delta1, Rho1, Psi1) :-
 	  Delta1=Delta,
 	  Rho1=Rho,
 	  Psi1=Psi
-	/*
-	for(M, P, S, A): reduce A.
-	*/
 	/*
 	sym(P, S, A): reduce A in sym(P, S, A)
 	*/
@@ -1139,7 +1137,16 @@ rewrite(T, Rem, seq(Delta1), Rho1) :-
 	empty_avl(Gamma),
 	empty_avl(Rho),
 	empty_avl(Psi),
-	rewrite(T, Gamma, Delta, Rho, Psi, Rem, Gamma, Delta1, Rho1, Psi).
+  current_output(Out),
+  open_null_stream(Null),
+  set_output(Null),
+  statistics(runtime, [Time0|_]),
+  rewrite(T, Gamma, Delta, Rho, Psi, Rem, Gamma, Delta1, Rho1, Psi),
+  statistics(runtime, [Time1|_]),
+  Time is (Time1-Time0),
+  set_output(Out),
+  format('rewrite in: ~dms~n', [Time]),
+  set_output(Null).
 
 rewrite_debug(T, Rem, _, _, Delta1, Rho1) :-
 	(   rewrite(T, Rem, Delta1, Rho1) ->

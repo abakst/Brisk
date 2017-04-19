@@ -112,9 +112,9 @@ builtin = SpecTable [
              [ EPrimOp Recv [ EType (TyConApp "Control.Distributed.Process.SymmetricProcess.SelfSigned" [TyVar "A"]) Nothing
                             , EVar "p" (Just pidType)
                             ] (Just (procType (TyVar "A")))
-             , ELam "msg" (ECase
+             , ELam "le_msg" (ECase
                            (TyVar "A")
-                           (EVar "msg" Nothing)
+                           (EVar "le_msg" Nothing)
                            [ ( "Control.DistributedProcess.SymmetricProcess.SelfSigned"
                              , ["X", "pay"]
                              , EPrimOp Return [EVar "pay" (Just (TyVar "A"))] Nothing

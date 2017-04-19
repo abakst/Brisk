@@ -44,11 +44,11 @@ runRewriter e mdest
                               % " --goal "    % w
                               % " --noinfo --nologo "
                               % "2>/dev/null "
-                              -- % "1>/dev/null "
+                              % "1>/dev/null "
                               ) (fromString rw) query
          output tmp (select $ textToLines rwquery)
          l <- select $ textToLines cmd
-         {- echo l -}
+         echo l
          maybe (return ()) (saveTemp tmp) mdest
          status <- shell cmd empty
          reportStatus status
@@ -76,7 +76,7 @@ statusMsg (ExitFailure c)
   = "\x1b[1;31mERROR: Unexpected Status!\x1b[0m"
 
 queryTemplate t r
-  = format("rewrite_query(T,Rem) :- Rem="%s%",\nT="%s%".") r t
+  = format("rewrite_query(T,Rem) :- \nRem="%s%",\nT="%s%".") r t
 
 -- template :: String -> String -> String -> String
 template tmp
@@ -402,7 +402,10 @@ mkCases pid x cases d
     d' = fromMaybe mkSkip d
 
 mkCase :: Doc -> Doc -> Doc -> Doc
-mkCase pid e s = compoundTerm "case" [pid, e, s]
+mkCase pid e s = compoundTerm "case" [pid, e', s']
+  where
+    e' = if e == Doc.empty then mkSkip else e
+    s' = if s == Doc.empty then mkSkip else s
 
 mkDefault :: Doc -> Doc -> Doc
 mkDefault pid s = compoundTerm "default" [pid, s]

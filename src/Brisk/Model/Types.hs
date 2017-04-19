@@ -1,3 +1,4 @@
+{-# LANGUAGE ParallelListComp #-}
 {-# LANGUAGE MagicHash #-}
 {-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE DeriveDataTypeable #-}
@@ -48,10 +49,8 @@ import System.Random
 nextStr :: String -> IO String
 -----------------------------------------------  
 nextStr s = do
-  c0 <- randomRIO ('a', 'z')
-  c1 <- randomRIO ('a', 'z')
-  d  <- randomRIO (0, 9)
-  return (s ++ [c0,c1,intToDigit d])
+  c0 <- randomRIO ('a', 'z') 
+  return (s ++ [c0])
 
 type Id = String                 
 
@@ -240,10 +239,7 @@ substs :: Subst b (EffExpr b a)
        -> [EffExpr b a]
        -> EffExpr b a
        -> EffExpr b a
-substs froms tos e
-  = foldl go e (zip froms tos)
-  where
-    go e (x,a) = subst x a e
+substs froms tos = subst (zip froms tos)
 
 simplify :: (Show a, Show b, Subst b (EffExpr b a))
          => EffExpr b a -> EffExpr b a
@@ -262,7 +258,7 @@ simplify (EPrRec x y e b xs l)
   = EPrRec x y (simplify e) (simplify b) (simplify xs) l
 simplify (EApp e1 e2 l)
   = case e1' of
-      ELam b m _           -> subst b e2' m
+      ELam b m _           -> subst [(b,e2')] m
       ECase t e alts md l' -> simplifyCaseApp t e alts md l' e2' l
       _                    -> EApp e1' e2' l
   where
@@ -310,17 +306,27 @@ simplifyCaseApp t caseE alts md l e' l'
 
 unfoldRec :: Subst b (EffExpr b a) => EffExpr b a -> EffExpr b a
 unfoldRec m@(ERec b e l)
-  = subst b m e
+  = subst [(b, m)] e
 
 substAlt :: (Avoid b, Annot a, Ord b)
-         => b -> EffExpr b a -> (b, [b], EffExpr b a) -> (b, [b], EffExpr b a)
-substAlt x a (c, bs, e) = (c, bs', subst x a e')  
+         => Sub b (EffExpr b a)
+         -> (b, [b], EffExpr b a) -> (b, [b], EffExpr b a)
+substAlt s (c, bs, e)
+  = (c, bs', substExpr True s' e)
   where
-    (bs', e')    = foldr go ([], e) bs
-    go b (bs, e) =
-      let b' = avoid (fv a) b in
-      (b':bs, substExpr True b (EVar b' dummyAnnot) e)
-
+    cas  = [ (b, EVar b' dummyAnnot) | b <- bs | b' <- bs' ]
+    bs'  = avoid fvs <$> bs
+    fvs  = fvSubst s
+    s'   = cas ++ restrSubst s bs
+  -- | x `elem` bs
+  -- = (c, bs, e)
+  -- | otherwise
+  -- = (c, bs', subst x a e')  
+  -- where
+  --   bs'          = avoid fvs <$> bs
+  --   e'           = foldl' go e (zip bs bs')
+  --   fvs          = fv a
+  --   go e (b, b') = if b `elem` fv e then substExpr True b (EVar b' dummyAnnot) e else e
 
 conEffExpr :: Annot a => a -> T.Type -> DataCon -> EffExpr Id a  
 conEffExpr l t d
@@ -350,10 +356,19 @@ vv = "#vv"
 exprString :: Pretty (EffExpr b a) => EffExpr b a -> String
 exprString e = render (pp e)
 
+type Sub b a = [(b,a)]
 class Ord b => Subst b a where
-  subst   :: b -> a -> a -> a
+  subst   :: Sub b a -> a -> a
   fv      :: a -> Set.Set b 
 
+apSubst :: Eq b => Sub b a -> b -> Maybe a
+apSubst sub x = lookup x sub
+
+restrSubst :: (Subst b a, Eq b) => Sub b a -> [b] -> Sub b a
+restrSubst sub xs
+  = filter (\(x,_) -> x `notElem` xs) sub
+fvSubst sub
+  = Set.unions $ (fv . snd <$> sub)
 -- class ToTyVar b where
 --   toTyVar :: b -> T.TyVar
 
@@ -477,60 +492,64 @@ instance (Avoid b, Annot a, Ord b) => Subst b (EffExpr b a) where
 
 instance Ord b => Subst b (Type b) where
   fv _  = Set.empty
-  subst x t = go
+  subst s = go
     where
-      go v@(TyVar x') | x == x'   = t
-                      | otherwise = v
+      go v@(TyVar x)
+        = fromMaybe v $ apSubst s x
       go (TyApp t1 t2) = TyApp (go t1) (go t2)
       go (TyConApp b ts) = TyConApp b (go <$> ts)
       go (TyFun t1 t2) = TyFun (go t1) (go t2)
 
 -- A dirty hack, but maybe not so dirty
 substExpr :: (Avoid b, Annot a, Ord b)
-          => Bool -> b -> EffExpr b a -> EffExpr b a -> EffExpr b a
-substExpr b x a = go
+          => Bool -> Sub b (EffExpr b a) -> EffExpr b a -> EffExpr b a
+substExpr flg s = go
     where
-      go (EAny t l) = EAny (go t) l
+      go (EAny t l)      = EAny (go t) l
       go (ESymElt set l) = ESymElt (go set) l
       go v@(EVal{}) = v
       -- go v@(EVal (b,t,p) l) = (EVal (b, t, (substPred x a p)) l)
-      go v@(EVar x' _)
-        = case a of
-            EVar y' l | x == x' && b -> EVar y' l
-            _         | x == x'      -> a
-                      | otherwise    -> v
+      go v@(EVar x _)
+        = fromMaybe v $ apSubst s x
+        -- WTF whas I doing here:
+        -- = case a of
+        --     EVar y' l | x == x' && b -> EVar y' l
+        --     _         | x == x'      -> a
+        --               | otherwise    -> v
       go v@(ECon c as l)
         = ECon c (go <$> as) l
       go g@(EPrRec a b f eb e0 l)
-        | x == a || x == b = g
-        | otherwise = EPrRec a' b' (go f') (go eb) (go e0) l
+        = EPrRec a' b' (go f') (go eb) (go e0) l
         where
-          (ELam a' (ELam b' f' _) _) = go (ELam a (ELam b f dummyAnnot) dummyAnnot)
+          s' = restrSubst s [a,b]
+          (ELam a' (ELam b' f' _) _)
+            = substExpr flg s' (ELam a (ELam b f dummyAnnot) dummyAnnot)
       go g@(ERec f e l)
-        | f == x    = g
-        | otherwise = ERec f (go (substExpr True f (EVar f' dummyAnnot) e)) l
+        = ERec f' (substExpr flg s' e) l
         where
-          f' = avoid (fv a) f
-      go f@(ELam x' e l)
-        | x == x'   = f
-        | otherwise = ELam x'' (go (substExpr True x' (EVar x'' dummyAnnot) e)) l
+          f' = avoid (fvSubst s) f
+          s' = (f, EVar f' dummyAnnot) : restrSubst s [f]
+      go f@(ELam x e l)
+        = ELam x' (substExpr flg s' e) l
         where
-          x'' = avoid (fv a) x'
-      go e@(ELet x' e1 e2 l)
-        | x == x' = e
-        | otherwise = ELet x'' (go e1) (go (substExpr True x' (EVar x'' dummyAnnot) e2)) l
+          x' = avoid (fvSubst s) x
+          s' = (x, EVar x' dummyAnnot) : restrSubst s [x]
+      go e@(ELet x e1 e2 l)
+        = ELet x' e1' e2' l
         where
-          x'' = avoid (fv a) x'
+          e1' = substExpr flg s e1
+          x'  = avoid (fvSubst s) x
+          e2' = substExpr flg ((x, EVar x' dummyAnnot) : restrSubst s [x]) e2
       go (ECase t e es d l)
-        = ECase t (go e) (substAlt x a <$> es) (go <$> d) l
+        = ECase t (go e) (substAlt s <$> es) (go <$> d) l
       go (EApp e1 e2 l)
         = EApp (go e1) (go e2) l
       go (EPrimOp o es l)
         = EPrimOp o (go <$> es) l
       go ty@(EType t l)
-        = case a of
-            EType t' l' -> EType (subst x t' t)  l
-            _           -> ty
+        = EType (subst s' t) l
+        where
+          s' = [(x, t') | (x, EType t' l') <- s]
 
 fvExpr :: (Avoid b, Annot a, Ord b) => EffExpr b a -> Set.Set b
 fvExpr (EAny t _)      = fv t
@@ -569,7 +588,8 @@ class Annot a where
 instance Avoid Id where
   avoid fvs x
     | Set.member x fvs
-    = let s = unsafePerformIO $ nextStr x in avoid fvs s
+    = let s = unsafePerformIO $ nextStr x
+      in avoid fvs s
     | otherwise
     = x
 
