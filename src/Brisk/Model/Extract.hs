@@ -21,7 +21,7 @@ import qualified Data.Set as Set
 import qualified Brisk.Model.Env as Env
 import           Brisk.Transform.ANF (anormalize)
 import           Brisk.Model.GhcInterface
-import           Brisk.Model.Types
+import           Brisk.Model.Types as T
 import           Brisk.Model.Builtins
 import           Brisk.Model.Prolog hiding (BriskAnnot(..))
 -- import           Brisk.Model.Promela
@@ -35,7 +35,7 @@ data MGState = MGS { hscEnv    :: !HscEnv
                    , impureTys :: ![Id]
                    , procTy    :: !Id
                    , cnt       :: !Int
-                   , srcSpans  :: ![SrcSpan]
+                   , srcSpans  :: ![SourceSpan]
                    }
 
 -- initialEState :: HscEnv -> ModGuts -> Var -> MGState
@@ -45,25 +45,21 @@ initialEState henv mg p t
         , impureTys   = t 
         , procTy   = p
         , cnt      = 0
-        , srcSpans = [noSrcSpan]
+        , srcSpans = [noSpan]
         }
 
 type EffMap = Env.Env Id AbsEff 
 
 instance Annot TyAnnot where
-  dummyAnnot = (Nothing, noSrcSpan)
-
-instance HasType TyAnnot where
-  getType         = fst
-  setType t (_,l) = (t,l)
+  dummyAnnot = (Nothing, noSpan)
 
 pushSpan :: RealSrcSpan -> MGen ()              
-pushSpan ss = modify $ \s -> s { srcSpans = RealSrcSpan ss : srcSpans s }
+pushSpan ss = modify $ \s -> s { srcSpans = realSpan ss : srcSpans s }
 
-currentSpan :: MGen SrcSpan
+currentSpan :: MGen SourceSpan
 currentSpan = head <$> gets srcSpans
 
-popSpan ::  MGen SrcSpan
+popSpan ::  MGen SourceSpan
 popSpan = do span:spans <- gets srcSpans
              modify $ \s -> s { srcSpans = spans }
              return span
@@ -72,7 +68,7 @@ noAnnot :: Functor f => f a -> f TyAnnot
 noAnnot = fmap (const dummyAnnot)
 
 specAnnot :: Maybe Ty.Type -> TyAnnot  
-specAnnot t = (idOfType <$> t, noSrcSpan)
+specAnnot t = (idOfType <$> t, noSpan)
 
 annotType :: CoreExpr -> AbsEff -> AbsEff
 annotType e t = t { annot = a }
@@ -87,7 +83,7 @@ liftAnnot t = (t, noSrcSpan)
 
 specTableEnv :: SpecTableIn -> EffMap
 specTableEnv (SpecTable tab)
-  = Env.addsEnv Env.empty [ (x, liftAnnot <$> t) | x :<=: t <- tab ]
+  = Env.addsEnv Env.empty [ (x, t) | x :<=: t <- tab ]
 
 impureTypes = [ ("Control.Distributed.Process.Internal.Types", "Process")
               , ("Control.Distributed.Static", "Closure")
@@ -104,7 +100,7 @@ runMGen bs hsenv mg specs@(SpecTable speccies) prog
        --                  return (nameId nm :<=: t)
        
        -- putStrLn (briskShowPpr prog')
-       let g0    = Env.unionEnvs (specTableEnv {- binfix -} builtin) (specTableEnv specs)
+       let g0       = Env.unionEnvs (specTableEnv {- binfix -} builtin) (specTableEnv specs)
            -- binfix = SpecTable builtin'
        impureTys <- forM impureTypes $
                       fmap nameId . uncurry (ghcTyName hsenv)
@@ -150,7 +146,7 @@ bindId :: NamedThing a => a -> Id
 bindId = nameId . getName
 
 annotOfBind x
-  = (Just . idOfType $ idType x, getSrcSpan x)
+  = (Just . idOfType $ idType x, T.sourceSpan $ getSrcSpan x)
 
 mGenBind :: EffMap -> CoreBind -> MGen EffMap 
 mGenBind g (NonRec x b)
@@ -340,7 +336,7 @@ mGenCaseAlts g = mapM go
     go (DEFAULT, [], e)
       = error "unhandled DEFAULT case"
 
-litEffect :: SrcSpan -> Literal -> AbsEff
+litEffect :: SourceSpan -> Literal -> AbsEff
 litEffect l (LitInteger i _) = litInt i (Nothing, l)
 litEffect l (MachInt i)      = litInt i (Nothing, l)
 litEffect l (MachInt64 i)    = litInt i (Nothing, l)

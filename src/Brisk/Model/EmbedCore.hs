@@ -85,7 +85,7 @@ embedSpecTable mod names tab@(SpecTable entries)
        encoded <- mkStringExpr str
        return $ NonRec (mkExportedLocalId VanillaId t ty) encoded
          where
-           entries' = [ x :<=: fmap fst t | x :<=: t <- entries, x `elem` ids ]
+           entries' = [ x :<=: t | x :<=: t <- entries, x `elem` ids ]
            ids      = nameId <$> names
            str      = specTableToWords (SpecTable entries')
            ty       = stringTy

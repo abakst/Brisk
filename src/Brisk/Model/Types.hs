@@ -26,6 +26,8 @@ import qualified Data.Set as Set
 import Name
 import BasicTypes (Arity)
 import TyCon
+import SrcLoc
+import FastString
 import DataCon
 import Data.Data
 import Data.Char
@@ -596,16 +598,47 @@ instance Avoid Id where
 instance Annot () where
   dummyAnnot = ()
 
-type TyAnnot  = (Maybe (Type Id), SrcSpan)
+data SourceSpan = Span String Int Int Int Int
+                deriving (Eq, Generic, Typeable, Show)
+instance Serialize SourceSpan 
+
+noSpan :: SourceSpan
+noSpan = sourceSpan noSrcSpan
+
+realSpan :: RealSrcSpan -> SourceSpan
+realSpan sp
+  = Span (unpackFS $ srcLocFile st)
+         (srcLocLine st)
+         (srcLocCol st)
+         (srcLocLine end)
+         (srcLocCol end)
+  where
+    (st, end) = (realSrcSpanStart sp, realSrcSpanEnd sp)
+
+sourceSpan :: SrcSpan -> SourceSpan
+sourceSpan span
+ = case (st, end) of
+     (RealSrcLoc loc, RealSrcLoc loc')
+       -> Span (unpackFS $ srcLocFile loc)
+               (srcLocLine loc)
+               (srcLocCol loc)
+               (srcLocLine loc')
+               (srcLocCol loc')
+     (UnhelpfulLoc fs, _)
+       -> Span (unpackFS fs) (-1) (-1) (-1) (-1)
+  where
+    (st, end) = (srcSpanStart span, srcSpanEnd span)
+
+type TyAnnot  = (Maybe (Type Id), SourceSpan)
 type AbsEff = EffExpr Id TyAnnot
 
-data SpecTable a = SpecTable [SpecEntry a]
+data SpecTable a = SpecTable { entries :: [SpecEntry a] }
                  deriving (Show, Generic)
 data SpecEntry a = Id :<=: EffExpr Id a
-                   deriving (Show, Generic)
+                   deriving (Show, Generic, Functor)
 
 type AnnOut       = TyAnnot
-type AnnIn        = Maybe (Type Id)
+type AnnIn        = TyAnnot
 type SpecEntryOut = SpecEntry AnnOut
 type SpecEntryIn  = SpecEntry AnnIn
 type SpecTableOut = SpecTable AnnOut
@@ -613,9 +646,6 @@ type SpecTableIn  = SpecTable AnnIn
 
 instance Serialize a => Serialize (SpecEntry a)
 instance Serialize a => Serialize (SpecTable a)
-
-instance Annot AnnIn where
-  dummyAnnot = Nothing
 
 lookupTable :: Id -> SpecTable a -> Maybe (EffExpr Id a)
 lookupTable b (SpecTable es)

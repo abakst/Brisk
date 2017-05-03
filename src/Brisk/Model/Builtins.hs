@@ -47,7 +47,10 @@ procType t = TyConApp "Control.Distribted.Process.Internal.Types.Process" [t]
 unitType = TyConApp "GHC.Base.()" []  
 
 builtin :: SpecTableIn
-builtin = SpecTable [
+builtin =
+  SpecTable .
+  fmap (fmap (\t -> (t, noSpan))) $
+  [
     "Control.Distributed.Process.Internal.Primitives.send"
     :<=:
     ELam "T" (

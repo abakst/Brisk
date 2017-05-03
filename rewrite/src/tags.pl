@@ -6,6 +6,7 @@
 		 get_proc/2,
 		 sym_set/1,
 		 check_race_freedom/2,
+                 check_race_freedom_debug/2,
 		 is_recv_from/1,
 		 tags_independent/2,
 		 parse_send/6,
@@ -313,3 +314,9 @@ check_race_freedom(T, T2) :-
 /*	portray_clause(T1), */
 	check_tags(T1),
 	untag_add_receive_from(T1, T2).
+
+check_race_freedom_debug(T,T2) :-
+        catch( check_race_freedom(T,T2)
+             , race-condition(X)
+             , T2=race(X)
+             ).

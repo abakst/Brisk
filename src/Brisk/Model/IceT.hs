@@ -95,8 +95,8 @@ instance HasType a => HasType (IceTExpr a) where
   setType t e = e { E.annot = setType t (E.annot e) }
 
 instance HasType E.AnnIn where
-  getType = id
-  setType = const
+  getType          = id . fst
+  setType t (_, l) = (t, l)
 
 recCall :: E.Id -> ITM a (Maybe (E.Id, [E.Id]))
 recCall f
