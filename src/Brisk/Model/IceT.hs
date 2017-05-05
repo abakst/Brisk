@@ -260,7 +260,7 @@ fromEffExp s (E.ELet x e1 e2 l) mx
 
 fromEffExp s (E.EPrRec acc x body acc0 xs l) mx
   = do (stmt, _) <- fromEffExp s' body (Just acc)
-       exs       <- replaceSpawnParam =<< fromPure s xs
+       exs       <- fromPure s xs
        a0        <- fromPure s acc0
        return (foreach stmt (isPidSet exs, exs) a0, Nothing)
   where
@@ -520,16 +520,6 @@ withCurrentM p act = do q <- gets current
                         r <- act
                         modify $ \s -> s { current = q }
                         return r
-
-replaceSpawnParam :: IceTExpr a -> ITM a (IceTExpr a)
-replaceSpawnParam e@(E.EVar x l)
-  = do ps <- gets spawnParams
-       let matches = [ p | (E.EVar x' _, p) <- ps, x == x' ]
-       case matches of
-         [p] -> return (E.EVal (Just (E.CPidSet p)) l)
-         _   -> return e
-replaceSpawnParam e
-  = return e
 
 ---------------------------------------------------
 fromBind :: (Show a, HasType a, E.Annot a)

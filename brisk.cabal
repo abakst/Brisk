@@ -81,6 +81,7 @@ library
                      , utf8-string
                      , random
                      , parallel
+                     , logict
   hs-source-dirs:      src, examples
   default-language:    Haskell2010
 
