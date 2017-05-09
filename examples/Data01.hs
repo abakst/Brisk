@@ -2,8 +2,8 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DeriveDataTypeable #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# OPTIONS_GHC -fplugin Brisk.Plugin #-}
-{-# OPTIONS_GHC -fplugin-opt Brisk.Plugin:main #-}
+{- OPTIONS_GHC -fplugin Brisk.Plugin #-}
+{- OPTIONS_GHC -fplugin-opt Brisk.Plugin:main #-}
 module Scratch where
 import Control.Distributed.Process
 import Data.Binary

@@ -36,8 +36,6 @@ import Text.Show.Pretty (ppShow)
 
 -- type Ann         = (Maybe Type, SrcSpan)
 -- type EffExprBare = EffExpr Id Ann
-type EffExprOut = EffExpr Id AnnOut
-type EffExprIn  = EffExpr Id AnnIn
 
 -------------------------------------------
 -- Functions for *retrieving* specifications
@@ -46,7 +44,7 @@ tabOccName  = mkVarOcc "brisk_tab__"
 tabName mod = do u <- getUniqueM
                  return $ mkExternalName u mod tabOccName noSrcSpan
 
-retrieveAllSpecs :: HscEnv -> ModGuts -> CoreM [SpecTableIn]
+retrieveAllSpecs :: HscEnv -> ModGuts -> CoreM [SpecTable TyAnnot]
 retrieveAllSpecs env mg
   = do mods <- liftIO $ catMaybes <$> mapM (lookupModMaybe env) (usedModules mg)
        catMaybes <$> mapM (retrieveIfExport env mg) mods
@@ -54,7 +52,7 @@ retrieveAllSpecs env mg
     retrieveIfExport env mg mod
       = whenExports env mg mod tabOccName $ retrieveSpecs env mod
 
-retrieveSpecs :: MonadIO m => HscEnv -> Module -> m SpecTableIn
+retrieveSpecs :: MonadIO m => HscEnv -> Module -> m (SpecTable TyAnnot)
 retrieveSpecs env mod
   = do origNm <- liftIO . initTcForLookup env $ do
          loadInterfaceForModule (GhcPlugins.text "retrieveSpecs") mod
@@ -79,9 +77,9 @@ tyFromName env nm
   = do n     <- thNameToGhcName nm
        liftIO $ mkTyConTy <$> initTcForLookup env (lookupTyCon $ fromJust n)
 
-embedSpecTable :: Module -> [Name] -> SpecTableOut -> CoreM CoreBind
+embedSpecTable :: Module -> [Name] -> SpecTable TyAnnot -> CoreM CoreBind
 embedSpecTable mod names tab@(SpecTable entries)
-  = do t      <- tabName mod
+  = do t       <- tabName mod
        encoded <- mkStringExpr str
        return $ NonRec (mkExportedLocalId VanillaId t ty) encoded
          where

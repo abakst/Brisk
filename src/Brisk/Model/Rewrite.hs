@@ -185,12 +185,20 @@ collectStmts p = go
     go s
       = One p s
 
+runAssign (One p (Assgn x _ e))
+  = do eVal <- eval p e
+       modify $ \st -> st { consts = Env.addsEnv (consts st) [((p,x), eVal)] }
+       return (One p Skip)
+runAssign _
+  = mzero
+
 runSend :: RWAnnot s
         => RewriteContext s
         -> RWM s (RewriteContext s)
 runSend (One p (Send t q m))
   = do qPid <- getPidMaybe p q
-       enqueue t pPid qPid m
+       mv   <- eval p m
+       enqueue t pPid qPid mv
 
        bufs <- gets buffers
        
@@ -211,6 +219,10 @@ runRecvFrom (One q (Recv t (Just p) mx))
        return (One q Skip)
          where
            qPid = specPid q
+runRecvFrom (One q (Recv t Nothing mx))
+  = do senders <- gets concrSends
+       p       <- ofList (fromMaybe [] $ Env.lookup senders t)
+       runRecvFrom (One q (Recv t (Just (pidLit p)) mx))
 runRecvFrom _
   = mzero
 
@@ -251,6 +263,8 @@ doCaseStmt cs
       = return $ (patternEnv p xs xs', s)
       | otherwise
       = mzero
+    unifies p e1 e2
+      = abort "unifies" (p, e1, e2)
 
     patternEnv p es1 es2
       = [((p, x), e) | e <- es1 | T.EVar x _ <- es2]
@@ -493,7 +507,6 @@ freshInstOther spec@(Unfolded p ps) qs
   where
     toInst []           = True
     toInst is           = allRecvs is && distinct [p | p :?-->: _ <- is] 
-    toInst _            = False
 
     distinct [] = True
     distinct (x:xs) = x `notElem` xs && distinct xs
@@ -568,15 +581,9 @@ chooseInduction (c:cs)
     split c@(Sequence [c0])    = (c0, Nothing)
     split c@(Sequence (c0:cs)) = (c0, Just (Sequence cs))
 
-    makeSkip (One b _)  = One b Skip
-  -- | isInductive c
-  -- = let choices = chooseInduction cs in
-  --   (c, cs) : map (\(c',cs') -> (c', c:cs')) choices
-  -- where isInductive c@(Par _ _ _) = True
-  --       isInductive _             = False
-
 alwaysRules :: RWAnnot s => [RewriteContext s -> RWM s (RewriteContext s)]
-alwaysRules = [ applyToOneRule runSend
+alwaysRules = [ applyToOneRule runAssign
+              , applyToOneRule runSend
               , applyToOneRule runRecvFrom
               , runCollect
               ]
@@ -837,21 +844,25 @@ instance Fresh ProcessIdSpec where
   fresh (Unfolded q qs) = flip Unfolded qs <$> fresh q
   fresh (Concrete q)    = Concrete <$> fresh q
 
--- fromIceT :: RWAnnot a
---          => [IceTProcess a]
---          -> RWResult (RWTrace a) [RWTrace a]
--- fromIceT ps
---   = case rfRes of
---       Nothing       -> abort "Not Race Free!" ps
---       Just (m1, m2) ->
---         runRWM (doRewrite (all done1) ps) initState { concrSends = m1
---                                                     , symSends   = m2
---                                                     , pidSets    = psets
---                                                     }
---   where
---     psets = [ pset | ParIter _ pset _ <- ps ]
---     rfRes = tySenders ps
+fromIceT :: RWAnnot a
+         => [IceTProcess a]
+         -> [RewriteContext a]
+fromIceT ps
+  = case rfRes of
+      Nothing       -> abort "Not Race Free!" ps
+      Just (m1, m2) ->
+        findRewrite (runRewrites null cs) initState { concrSends = m1
+                                                    , symSends   = m2
+                                                    , pidSets    = psets
+                                                    }
+  where
+    cs    = dbgPP "cs!" (toContext <$> ps)
+    psets = [ pset | ParIter _ pset _ <- ps ]
+    rfRes = tySenders ps
 
+toContext :: RWAnnot a => IceTProcess a -> RewriteContext a
+toContext (Single p s)     = One (Concrete p) s
+toContext (ParIter p ps s) = Par [p] (Singleton ps) $ One (Unfolded p ps) s
 -- runRWM :: RWM s (RWResult a (RWTrace s)) -> RWState s -> RWResult (RWTrace s) [RWTrace s]
 -- runRWM rwm s0
 --   = fromMaybe failures success 
@@ -936,9 +947,9 @@ getPidSetMaybe pid m
 -- setStmt s (Single p _)         = Single p s
 -- setStmt s (Unfold p' p ps _ t) = Unfold p' p ps s t
 
--- seqTrace :: RWAnnot s => RWTrace s -> RWM s ()
--- seqTrace t
---   = modify $ \s -> s { trace = seqStmts [trace s, t] }
+seqTrace :: RWAnnot s => RWTrace s -> RWM s ()
+seqTrace t
+  = modify $ \s -> s { trace = seqStmts [trace s, t] }
 
 -- procPid :: IceTProcess s -> Maybe ProcessId                   
 -- procPid (Single p _)     = Just p
@@ -1356,43 +1367,44 @@ buffersUnchanged b b'
 --                       Result (q', p') -> return $ Result (p', q')
 --                       Stuck t         -> return $ Stuck t
 
--- tySenders :: [IceTProcess a] -> Maybe (Env.Env IceTType [ProcessId], Env.Env IceTType [ProcessId])
--- tySenders ps
---   | all (rf concrSend symSend) [ (p, s)  | Single p s <- ps ] &&
---     all (rf concrSend symSend) [ (ps, s) | ParIter _ ps s <- ps ]
---   = Just (concrSend, symSend)
---   | otherwise
---   = Nothing
---   where
---     -- -- For each type: who recvs it?
---     -- concrRecv = tyMap [ (t, p) | (p, (_,ts)) <- concrs, t <- ts ]
---     -- symRecv   = tyMap [ (t, p) | (p, (_,ts)) <- syms, t <- ts ]
---     -- For each type: who sends it?
---     concrSend = tyMap [ (t, p) | (p, ts) <- concrs, t <- ts ]
---     symSend   = tyMap [ (t, p) | (p, ts) <- syms,   t <- ts ]
---     -- For each process, which types are sent/received?
---     concrs  = [ (p, msgSends s) | Single p s <- ps    ]
---     syms    = [ (p, msgSends s) | ParIter _ p s <- ps ]
+tySenders :: [IceTProcess a] -> Maybe (Env.Env IceTType [ProcessId], Env.Env IceTType [ProcessId])
+tySenders ps
+  | all (rf concrSend symSend) [ (p, s)  | Single p s <- ps ] &&
+    all (rf concrSend symSend) [ (ps, s) | ParIter _ ps s <- ps ]
+  = Just (concrSend, symSend)
+  | otherwise
+  = Nothing
+  where
+    -- -- For each type: who recvs it?
+    -- concrRecv = tyMap [ (t, p) | (p, (_,ts)) <- concrs, t <- ts ]
+    -- symRecv   = tyMap [ (t, p) | (p, (_,ts)) <- syms, t <- ts ]
+    -- For each type: who sends it?
+    concrSend = tyMap [ (t, p) | (p, ts) <- concrs, t <- ts ]
+    symSend   = tyMap [ (t, p) | (p, ts) <- syms,   t <- ts ]
+    -- For each process, which types are sent/received?
+    concrs  = [ (p, msgSends s) | Single p s <- ps    ]
+    syms    = [ (p, msgSends s) | ParIter _ p s <- ps ]
 
---     tyMap l = Env.addsEnv Env.empty
---               [ (fst . head $ grp, nub (snd <$> grp)) | grp <- groupBy ((==) `on` fst) l ]
+    tyMap l = Env.addsEnv Env.empty
+              [ (fst . head $ grp, nub (snd <$> grp)) | grp <- groupBy ((==) `on` fst) l ]
 
--- rf :: Env.Env IceTType [ProcessId] -> Env.Env IceTType [ProcessId] -> (ProcessId, IceTStmt a) -> Bool
--- rf concrs syms (p,s)
---   = queryMsgTys const check True s
---   where
---     check False _ = False
---     check _     t = length (lookupConcr t) + length (lookupSym t) <= 1
+rf :: Env.Env IceTType [ProcessId] -> Env.Env IceTType [ProcessId] -> (ProcessId, IceTStmt a) -> Bool
+rf concrs syms (p,s)
+  = queryMsgTys const check True s
+  where
+    check False _ = False
+    check _     t = length (lookupConcr t) + length (lookupSym t) <= 1
 
---     lookupConcr t = maybe [] (\ps -> group (ps L.\\ [p])) $ Env.lookup concrs t
---     lookupSym t   = maybe [] (\ps -> ps L.\\ [p]) $ Env.lookup syms t
+    lookupConcr t = maybe [] (\ps -> group (ps L.\\ [p])) $ Env.lookup concrs t
+    lookupSym t   = maybe [] (\ps -> ps L.\\ [p]) $ Env.lookup syms t
 
--- msgSends:: IceTStmt a -> [IceTType]
--- msgSends s = sends
---   where
---     send1 snds t = t:snds
---     recv1 snds t = snds
---     sends        = queryMsgTys send1 recv1 [] s
+msgSends:: IceTStmt a -> [IceTType]
+msgSends s = sends
+  where
+    send1 snds t = t:snds
+    recv1 snds t = snds
+    sends        = queryMsgTys send1 recv1 [] s
+
 pidLit p = T.EVal (Just (T.CPid p)) T.dummyAnnot
        
 instance (Pretty a, Pretty b) => Pretty (Env.Env a b) where

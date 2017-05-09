@@ -46,7 +46,7 @@ procType t = TyConApp "Control.Distribted.Process.Internal.Types.Process" [t]
 
 unitType = TyConApp "GHC.Base.()" []  
 
-builtin :: SpecTableIn
+builtin :: SpecTable TyAnnot
 builtin =
   SpecTable .
   fmap (fmap (\t -> (t, noSpan))) $

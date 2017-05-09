@@ -69,7 +69,8 @@ runBrisk bs mg binds
        annEnv       <- loadBriskAnns hsenv mg
        specMods     <- specModules hsenv mg annEnv
        let go (SpecTable entries) mod =
-             do (SpecTable entries') <- retrieveSpecs hsenv mod
+             do putMsgS (showSDoc dynflags  (ppr mod))
+                (SpecTable entries') <- retrieveSpecs hsenv mod
                 return (SpecTable (entries ++ entries'))
        specs0       <- retrieveAllSpecs hsenv mg
        let specTab0 = SpecTable (concat [ es | SpecTable es <- specs0 ])
@@ -115,7 +116,7 @@ specModules env mg annEnv
 
 isSpecMod annEnv = not . null . lookupAnns annEnv ModuleTarget
 
-fixupSpecNames :: ModGuts -> SpecTableOut -> AnnEnv -> CoreM (SpecTableOut, [Name])
+fixupSpecNames :: ModGuts -> SpecTable TyAnnot -> AnnEnv -> CoreM (SpecTable TyAnnot, [Name])
 fixupSpecNames mg (SpecTable specs) annEnv
   = do let exported = [(nameId n, n') | Avail _ n   <- mg_exports mg
                                       , Assume n' <- lookupAnns annEnv NamedTarget n

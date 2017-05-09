@@ -100,11 +100,11 @@ type Subset b a = (b, T.Type, Pred b a)
 data EffExpr b a =
    -- EVal    { valPred :: Subset b a, annot :: a }                -- ^ {v | p}
    EVal    { valVal :: Maybe Const, annot :: a }
- | ESymElt { symSet :: EffExpr b a, annot :: a }
  | EVar    { varId :: b, annot :: a }                          -- ^ x
+ | ESymElt { symSet :: EffExpr b a, annot :: a }
  | ECon    { conId :: b, conArgs :: [EffExpr b a], annot :: a }
- | EAny    { anyTy  :: EffType b a, annot :: a }
  | ELam    { lamId :: b, lamBody :: EffExpr b a, annot :: a }            -- ^ \x -> e
+ | EAny    { anyTy  :: EffType b a, annot :: a }
  | EApp    { appFun :: EffExpr b a, appArg :: EffExpr b a, annot :: a }
  | EPrRec  { precAcc  :: b
            , precNext :: b
@@ -630,19 +630,14 @@ sourceSpan span
     (st, end) = (srcSpanStart span, srcSpanEnd span)
 
 type TyAnnot  = (Maybe (Type Id), SourceSpan)
+data EncodedAnnot = Encoded { unEncode :: TyAnnot }
+
 type AbsEff = EffExpr Id TyAnnot
 
 data SpecTable a = SpecTable { entries :: [SpecEntry a] }
-                 deriving (Show, Generic)
+                 deriving (Eq, Show, Generic)
 data SpecEntry a = Id :<=: EffExpr Id a
-                   deriving (Show, Generic, Functor)
-
-type AnnOut       = TyAnnot
-type AnnIn        = TyAnnot
-type SpecEntryOut = SpecEntry AnnOut
-type SpecEntryIn  = SpecEntry AnnIn
-type SpecTableOut = SpecTable AnnOut
-type SpecTableIn  = SpecTable AnnIn
+                   deriving (Eq, Show, Generic, Functor)
 
 instance Serialize a => Serialize (SpecEntry a)
 instance Serialize a => Serialize (SpecTable a)
@@ -651,13 +646,24 @@ lookupTable :: Id -> SpecTable a -> Maybe (EffExpr Id a)
 lookupTable b (SpecTable es)
   = listToMaybe [ t | x :<=: t <- es, x == b ]
 
-specTableToWords :: SpecTableIn -> String
-specTableToWords = B8String.decode . B.unpack . encode
+specTableToWords :: SpecTable TyAnnot -> String
+specTableToWords (SpecTable es)
+  = map (chr . fromIntegral) . B.unpack . encode $ es
 
-wordsToSpecTable :: String -> SpecTableIn    
+myencode :: Serialize a => a -> String
+myencode = B8String.decode . B.unpack . encode  
+
+mydecode :: Serialize a => String -> Either String a
+mydecode = decode . B.pack . B8String.encode
+
+
+wordsToSpecTable :: String -> SpecTable TyAnnot
 wordsToSpecTable wds
-  = case decode . B.pack . B8String.encode $ wds of 
+  = case decode . B.pack . map (fromIntegral . ord) $ wds of 
       Left str -> abort "wordsToSpecTable" str
-      Right t  -> t
+      Right es -> SpecTable es
 
 data BriskAnnot = AnnotModule
+
+instance Annot TyAnnot where
+  dummyAnnot = (Nothing, noSpan)

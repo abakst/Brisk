@@ -21,7 +21,10 @@ import StringBuffer
 import HeaderInfo
 import Data.Maybe
 import Brisk.Model.Types
-import Brisk.Model.Prolog
+import Brisk.Pretty
+-- import Brisk.Model.Prolog
+import Brisk.Model.IceT
+import Brisk.Model.Rewrite
 import Text.Show.Pretty
 import Options.Generic
 import System.Exit
@@ -71,7 +74,10 @@ runBrisk fn fun msave
                  Nothing  -> do
                    putStrLn $ "Unknown name: " ++ fun
                    exitFailure
-                 Just eff -> runRewriter eff msave
+                 -- Just eff -> runRewriter eff msave
+                 Just eff -> let (_, ps) = runIceT eff
+                                 res     = fromIceT ps
+                             in putStrLn (render (pp res))
 
 qualify :: String -> String -> String
 qualify mn b = mn ++ "." ++ b

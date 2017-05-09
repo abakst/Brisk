@@ -1,5 +1,5 @@
-{-# OPTIONS_GHC -fplugin Brisk.Plugin #-}
-{-# OPTIONS_GHC -fplugin-opt Brisk.Plugin:blain #-}
+{- OPTIONS_GHC -fplugin Brisk.Plugin #-}
+{- OPTIONS_GHC -fplugin-opt Brisk.Plugin:blain #-}
 module Simple00 where
 import Control.Distributed.Process
 

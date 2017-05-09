@@ -1,5 +1,7 @@
+{-# LANGUAGE ScopedTypeVariables #-}
 module AllTests where
 import Brisk.Model.Rewrite -- (findRewrite, runRewrites, RWState(..), ProcessIdSpec(..), RewriteContext(..))
+import Control.Exception
 import Control.Monad.State
 import Distribution.TestSuite
 import qualified Brisk.Model.Types as T
@@ -15,7 +17,7 @@ tests = return $ [ Group { groupName    = "micro tests"
                
   where
     posTests = (Test . rewriteTest) <$> [
-      test0
+        test0
       , test1
       , test2
       , test3
@@ -27,12 +29,14 @@ tests = return $ [ Group { groupName    = "micro tests"
       , test10
       , test11
       , test12
-      -- , test13
       , test14
       , test15
       , test16
+      -- Approaching reality:
       , workSteal0
       , workSteal
+      , mapreduce0
+      , mapreduce
       ]
 
 fst3 (n,_,_) = n
@@ -41,17 +45,19 @@ thd3 (_,_,e) = e
 
 rewriteTest :: RWAnnot s => (String, [RewriteContext s], [RewriteContext s]) -> TestInstance
 rewriteTest (n, q, expected)
-  = TestInstance { run = runTest
+  = TestInstance { run = runTest `catch` (\(e :: ErrorCall) ->
+                                           return (Finished (Distribution.TestSuite.Fail "")))
                  , name = n
                  , tags = []
                  , options = []
                  , setOption = \_ _ -> Right $ rewriteTest (n, q, expected)
                  }
   where
-    runTest = if doTest (runRewrites allDone q) == expected then
-                return (Finished Pass)
-              else
-                return (Finished (Distribution.TestSuite.Fail ""))
+    runTest =
+      if doTest (runRewrites (== expected) q) == expected then
+        return (Finished Pass)
+      else
+        return (Finished (Distribution.TestSuite.Fail ""))
 
 
 -- Quick tests go here:

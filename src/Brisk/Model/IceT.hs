@@ -94,7 +94,7 @@ instance HasType a => HasType (IceTExpr a) where
   getType     = getType . E.annot
   setType t e = e { E.annot = setType t (E.annot e) }
 
-instance HasType E.AnnIn where
+instance HasType E.TyAnnot where
   getType          = id . fst
   setType t (_, l) = (t, l)
 

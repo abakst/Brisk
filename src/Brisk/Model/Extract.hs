@@ -50,9 +50,6 @@ initialEState henv mg p t
 
 type EffMap = Env.Env Id AbsEff 
 
-instance Annot TyAnnot where
-  dummyAnnot = (Nothing, noSpan)
-
 pushSpan :: RealSrcSpan -> MGen ()              
 pushSpan ss = modify $ \s -> s { srcSpans = realSpan ss : srcSpans s }
 
@@ -81,7 +78,7 @@ exprEType = idOfType . exprType
 
 liftAnnot t = (t, noSrcSpan)  
 
-specTableEnv :: SpecTableIn -> EffMap
+specTableEnv :: SpecTable TyAnnot -> EffMap
 specTableEnv (SpecTable tab)
   = Env.addsEnv Env.empty [ (x, t) | x :<=: t <- tab ]
 
@@ -89,7 +86,7 @@ impureTypes = [ ("Control.Distributed.Process.Internal.Types", "Process")
               , ("Control.Distributed.Static", "Closure")
               ]
 
-runMGen :: [String] -> HscEnv -> ModGuts -> SpecTableIn -> CoreProgram -> IO SpecTableOut
+runMGen :: [String] -> HscEnv -> ModGuts -> SpecTable TyAnnot -> CoreProgram -> IO (SpecTable TyAnnot)
 runMGen bs hsenv mg specs@(SpecTable speccies) prog
   = do -- initBinds <- resolve hsenv (specTuple <$> specs)
        -- let g0    = Env.addsEnv Env.empty [ (nameId x, specAnnot <$> b) | (x,b) <- initBinds ]
