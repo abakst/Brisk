@@ -33,8 +33,9 @@ library
                    , Brisk.Model.Types
                    , Brisk.Model.Extract
                    , Brisk.Model.Builtins
-                   , Brisk.Model.Prolog
+                   -- , Brisk.Model.Prolog
                    , Brisk.Model.Rewrite
+                   , Brisk.Model.RewriteTypes
                    -- , Brisk.Model.Promela
                    , Brisk.Model.EmbedCore
                    , Brisk.Model.IceT

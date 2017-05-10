@@ -45,14 +45,14 @@ data IceTProcess_ b a = Single  ProcessId (IceTStmt a)
                      deriving (Show, Eq)
 type IceTProcess = IceTProcess_ E.Id
 
-data IceTState a = IS { current   :: E.EffExpr E.Id a
-                      , next      :: Char
+data IceTState a = IS { current     :: E.EffExpr E.Id a
+                      , next        :: Char
                       , loopCounter :: Int
-                      , recFns    :: [(E.Id,E.Id, [E.Id])]
-                      , par       :: [IceTProcess a]
+                      , recFns      :: [(E.Id,E.Id, [E.Id])]
+                      , par         :: [IceTProcess a]
                       , spawnParams :: [(IceTExpr a, ProcessId)]
-                      , params    :: [E.Id]
-                      , paramSets :: [(E.Id, IceTExpr a)]
+                      , params      :: [E.Id]
+                      , paramSets   :: [(E.Id, IceTExpr a)]
                       }
 queryMsgTys :: (a -> IceTType -> a)
             -> (a -> IceTType -> a)
@@ -83,6 +83,17 @@ substStmt x e = go
     go (While l s)     = While l (go s)
     go (Recv t w mx)   = Recv t (sub <$> w) mx
     go s               = s
+
+whileLeaves :: E.Id -> IceTStmt a -> [IceTStmt a]
+whileLeaves l = go
+  where
+    go (Continue l')   = [Continue l']
+    go (Seq ss)        = go (last ss)
+    go (Case e alts d) = concatMap go ([ s | (_,s) <- alts ] ++ (maybeToList d))
+    go s               = [s]
+
+whileReactive :: E.Annot a => E.Id -> IceTStmt a -> Bool
+whileReactive l body = nub (whileLeaves l body) == [Continue l]
 
 unSubstPid = undefined    
 
@@ -162,8 +173,8 @@ simplifySkips (Seq ss) = Seq ss'
 runIceT :: (Show a, HasType a, E.Annot a) => IceTExpr a -> (IceTState a, [IceTProcess a])
 runIceT e = (st, procs)
   where
-    procs           = anormalizeProc
-                    . mapProcStmt (substStmt "a" aPid)
+    procs           =  anormalizeProc
+                    .  mapProcStmt (substStmt "a" aPid)
                   <$> (Single "a" stmt : par st)
     aPid            = E.EVal (Just (E.CPid "a")) E.dummyAnnot
     ((stmt, _), st) = runState (fromTopEffExp e) (IS aPid 'b' 0 [] [] [] [] [])

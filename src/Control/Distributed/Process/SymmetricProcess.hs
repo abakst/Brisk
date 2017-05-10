@@ -43,7 +43,8 @@ expectFrom p = receiveWait recv
 data SymSet a = SymSet {
     size  :: Int
   , elems :: [a]
-  }
+  } deriving (Generic, Typeable)
+instance Binary a => Binary (SymSet a)
 
 type SymProcessSet = SymSet ProcessId
 

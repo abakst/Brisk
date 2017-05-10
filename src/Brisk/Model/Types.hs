@@ -127,6 +127,9 @@ data EffExpr b a =
            , primArgs :: [EffExpr b a]
            , annot    :: a
            }
+ -- This does not occur in programs!
+ | EUnion { alts :: [EffExpr b a]
+          }
    deriving (Eq, Show, Generic, Functor)
 instance (Serialize b, Serialize a) => Serialize (EffExpr b a)
 
@@ -148,6 +151,22 @@ isVal _      = False
 isFun (ELam {})      = True
 isFun (ELet _ _ e _) = isFun e
 isFun _              = False
+----------------------------------------------- 
+-- | Joining Types
+----------------------------------------------- 
+join :: Eq b => EffExpr b a -> EffExpr b a -> EffExpr b a
+join (EVar x l) (EVar y _)
+  | x == y
+  = EVar x l
+join e@(EVal c1 l) (EVal c2 _)
+  | c1 == c2  = e
+join e@(ECon c es l) (ECon c' es' _)
+  | c == c'
+  = ECon c (zipWith join es es') l
+join (EUnion es) (EUnion es') = EUnion (es ++ es')
+join (EUnion es) e = EUnion (e:es)
+join e (EUnion es) = EUnion (e:es)
+join e1 e2 = EUnion [e1, e2]
 
 ----------------------------------------------- 
 -- | Type Conversion 
@@ -389,7 +408,7 @@ instance (Pretty b, Eq b) => Pretty (EffExpr b a) where
   -- ppPrec _ (EVal (v,t,Rel Eq (PEffect (EVar v' _)) e) _)
   --   | v == v' = pp e
   ppPrec _ (EAny t _)  = braces (pp t)
-  ppPrec _ (EVal mv _) = maybe (text "⊥") pp mv
+  ppPrec _ (EVal mv _) = maybe (text "*") pp mv
   ppPrec _ (ESymElt set _) = braces (text "_ ∈" <+> pp set)
   ppPrec _ (ECon c [] _)
     = pp c
@@ -429,6 +448,8 @@ instance (Pretty b, Eq b) => Pretty (EffExpr b a) where
   ppPrec z (ERec b e _)
     = text "letrec" <+> ppPrec z b <+> equals <+> ppPrec 0 e $$ text "in" <+> ppPrec z b
   ppPrec _ (EType t _)      = text "@" <> pp t
+  ppPrec _ (EUnion es)
+    = hcat (punctuate (text "+") (ppPrec 0 <$> es))
 
 instance Pretty PrimOp where
   ppPrec _ Self     = text "$self"
@@ -584,7 +605,7 @@ fvPred (PConst _)    = Set.empty
 class Avoid b where
   avoid :: Set.Set b -> b -> b
 
-class Annot a where
+class Eq a => Annot a where
   dummyAnnot :: a
 
 instance Avoid Id where

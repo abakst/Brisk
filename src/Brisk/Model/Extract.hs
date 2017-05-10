@@ -23,7 +23,7 @@ import           Brisk.Transform.ANF (anormalize)
 import           Brisk.Model.GhcInterface
 import           Brisk.Model.Types as T
 import           Brisk.Model.Builtins
-import           Brisk.Model.Prolog hiding (BriskAnnot(..))
+-- import           Brisk.Model.Prolog hiding (BriskAnnot(..))
 -- import           Brisk.Model.Promela
 import           Brisk.Model.IceT (runIceT, HasType(..))
 import           Brisk.Pretty
@@ -109,7 +109,7 @@ runMGen bs hsenv mg specs@(SpecTable speccies) prog
        -- dumpBinds all
        dumpBinds brisk
        forM_ brisk (putStrLn . render . PP.vcat . fmap pp . snd . runIceT . snd)
-       forM_ brisk (putStrLn . toBriskString . snd)
+       -- forM_ brisk (putStrLn . toBriskString . snd)
        return $ SpecTable [ x :<=: e | (x,e) <- all ]
   where
     go :: EffMap -> CoreProgram -> MGen EffMap

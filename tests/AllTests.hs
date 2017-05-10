@@ -1,12 +1,14 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 module AllTests where
-import Brisk.Model.Rewrite -- (findRewrite, runRewrites, RWState(..), ProcessIdSpec(..), RewriteContext(..))
+import Brisk.Model.Rewrite
+import Brisk.Model.RewriteTypes
 import Control.Exception
 import Control.Monad.State
 import Distribution.TestSuite
 import qualified Brisk.Model.Types as T
 import           Brisk.Model.IceT as I
 import Brisk.Model.Env as Env
+import Brisk.Pretty
 
 tests :: IO [Test]
 tests = return $ [ Group { groupName    = "micro tests"
@@ -79,96 +81,96 @@ recvAny ti y = Recv (t ti) Nothing (Just y)
 
 runTest t = map (consts . snd) $ runStateT t initState
 
-test0 = ("test0", [One (c "p") (Send (tys !! 0) (p "q") (v "x"))], [])
+test0 = ("test0", [One (c "p") True (Send (tys !! 0) (p "q") (v "x"))], [])
 
 test1 = ("test1",
-         [ One (c "p")
+         [ One (c "p") True
           (Send (tys !! 0) (p "q") (v "x"))
-        , One (c "q")
+        , One (c "q") True
           (Recv (tys !! 0) (Just (p "p")) (Just "m"))
         ],
         [])
 
 test2 = ( "test2"
-        , [ One (c "p") $
+        , [ One (c "p") True $
             Seq [send 0 "q" "x", recv 1 "q" "y"]
-          , One (c "q") $
+          , One (c "q") True $
             Seq [recv 0 "p" "m1", send 1 "p" "m2"]
           ]
         , []
         )
 
 test2_state
-  = [ One (c "p") $
+  = [ One (c "p") True $
           Seq [sendb 0 (p "q") (p "p"), recv 1 "q" "y"]
-    , One (c "q") $
+    , One (c "q") True $
           Seq [recv 0 "p" "m1", sendv 1 "m1" "m2"]
     ]
 
-test3 = ("test3", [ One (c "q") $ ForEach "x" (True, pset "xs") (Seq [send 0 "q" "mymsg", recv 0 "q" "foo"]) ], [])
+test3 = ("test3", [ One (c "q") True $ ForEach "x" (True, pset "xs") (Seq [send 0 "q" "mymsg", recv 0 "q" "foo"]) ], [])
 
-test4 = ("test4", [ Par ["x"] (Singleton "xs") (One (c "q") (Seq [send 0 "q" "mymsg", recv 0 "q" "foo"])) ], [])
+test4 = ("test4", [ Par ["x"] (Singleton "xs") (One (c "q") True (Seq [send 0 "q" "mymsg", recv 0 "q" "foo"])) ], [])
 
 test5 = ("test5",
          [ Par ["x"] (Singleton "xs") $
-              One (c "x") $
+              One (c "x") True $
                   Seq [recv 0 "p" "foo", recv 1 "p" "goo"]
-        , One (c "p") $
+        , One (c "p") True $
           ForEach "x" (True, pset "xs") (Seq [sendv 0 "x" "mymsg", sendv 1 "x" "amsg"])
         ], []
         )
 
 test6 = ("test6", [
-          One (c "q") $
+          One (c "q") True $
             recv 1 "r" "qx"
-        , One (c "r") $
+        , One (c "r") True $
             Seq [send 0 "p" "r", send 1 "q" "r"]
-        , One (c "p") $
+        , One (c "p") True $
             recv 0 "r" "px"
         ], [])
 
 test7 = ("test7", [ Par ["x"] (Singleton "xs") $
-            One (c "x") $
+            One (c "x") True$
              Seq [recv 0 "p" "foo", send 1 "q" "xgloop"]
         , Par ["x1"] (Singleton "xs") $
-            One (c "p") $
+            One (c "p") True$
               (sendv 0 "x1" "mymsg")
         , Par ["x2"] (Singleton "xs") $
-            One (c "q") $
+            One (c "q") True $
               (recvAny 1 "amsg")
         ], [])
 
 test9 = ("test9", [ Par ["x"] (Singleton "xs") $
-            One (c "x") $
+            One (c "x") True $
              Seq [recv 0 "p" "foo", send 1 "q" "xgloop"]
-        , One (c "p") $
+        , One (c "p") True $
             ForEach "x1" (True, pset "xs") (sendv 0 "x1" "mymsg")
-        , One (c "q") $
+        , One (c "q") True $
             ForEach "x2" (True, pset "xs") (recvAny 1 "amsg")
         ], [])
 
 test10 = ("test10", [ Par ["x"] (Singleton "xs") $
-               One (c "x") $
+               One (c "x") True $
                    Seq [recv 0 "q" "foo", send 1 "q" "xgloop"]
-        , One (c "q") $
+        , One (c "q") True $
             Seq [ ForEach "x1" (True, pset "xs") (sendv 0 "x1" "mymsg")
                 , ForEach "x2" (True, pset "xs") (recvAny 1 "floop")
                 ]
         ], [])
 
 test11 = ("test11", [ Par ["x"] (Singleton "xs") $
-               One (Unfolded "x" "xs") $
+               One (Unfolded "x" "xs") True $
                    Seq [recv 0 "q" "foo", sendv 1 "foo" "xgloop"]
-        , One (c "q") $
+        , One (c "q") True $
             Seq [ ForEach "x1" (True, pset "xs") (sendb 0 (v "x1") (p "q"))
                 , ForEach "x2" (True, pset "xs") (recvAny 1 "floop")
                 ]
         ], [])
 
 test12 = ("test12", [ Par ["x"] (Singleton "xs") $
-               One (Unfolded "x" "xs") $
+               One (Unfolded "x" "xs") True $
                    Seq [recv 0 "q" "foo", sendv 1 "foo" "xgloop"]
-        , One (c "q") $
+        , One (c "q") True $
             ForEach "x1" (True, pset "xs") $
                     Seq [sendb 0 (v "x1") (p "q")
                         ,recvv 1 "x1" "floop"
@@ -176,21 +178,21 @@ test12 = ("test12", [ Par ["x"] (Singleton "xs") $
         ], [])
 
 test13 = ("test13", [ Par ["x"] (Singleton "xs") $
-             One (Unfolded "x" "xs") $
+             One (Unfolded "x" "xs") True $
                While "bloop" $ Seq [ send 1 "q" "foo", Continue "bloop" ]
-         , One (c "q") $
+         , One (c "q") True $
                recvAny 1 "blue"
          ], [])
 test13Query = runRewrites (\ps -> null [ p | Just p <- contextPid <$> ps, p == (c "q")])
                           (snd3 test13)
 
-test14 = ("test14", [ One (c "p") $
+test14 = ("test14", [ One (c "p") True $
            While "bloop" $ Seq [ recv 0 "q" "what", recv 1 "q" "bloink" ]
-         , One (c "q") $
+         , One (c "q") True $
            Seq [ sendb 0 (p "p") (v "abcd"), sendb 1 (p "p") (v "efgh") ]
          ], [])
 
-test15 = ("test15", [ One (c "p") $
+test15 = ("test15", [ One (c "p") True $
            Seq [ recv 0 "q" "what"
                , Case (v "what")
                    [ ( T.ECon "Left" [] ()
@@ -202,11 +204,11 @@ test15 = ("test15", [ One (c "p") $
                    ]
                    Nothing
                ]
-         , One (c "q") $
+         , One (c "q") True $
            sendb 0 (p "p") (T.ECon "Left" [] ())
          ], [])
 
-test16 = ("test16", [ One (c "p") $
+test16 = ("test16", [ One (c "p") True $
            Seq [ recv 0 "q" "whom"
                , Case (v "whom")
                    [ ( T.ECon "Left" [T.EVar "x" ()] ()
@@ -221,7 +223,7 @@ test16 = ("test16", [ One (c "p") $
                    Nothing
                , sendb 1 (p "q") (p "p")
                ]
-         , One (c "q") $
+         , One (c "q") True $
            Seq [ sendb 0 (p "p") (T.ECon "Left" [p "q"] ())
                , sendb 1 (p "p") (p "q")
                , recv 2 "p" "floop"
@@ -230,14 +232,14 @@ test16 = ("test16", [ One (c "p") $
 
 workSteal0 =
   ( "worksteal0-mini"
-  , [ One (c "queue") $
+  , [ One (c "queue") True $
       ForEach "x" (True, pset "xs") $
       Seq [ recvAny 1 "q"
           , sendb 0 (v "q") (T.ECon "Right" [] ())
           ]
       
     , Par ["x0"] (Singleton "xs") $
-        One (Unfolded "x0" "xs") $
+        One (Unfolded "x0" "xs") True $
           While "loop0" $ Seq [
               sendb 1 (p "queue") (v "x0")
             , recv 0 "queue" "what"
@@ -256,7 +258,7 @@ workSteal0 =
 
 workSteal =
   ( "worksteal-mini"
-  , [ One (c "queue") $
+  , [ One (c "queue") True $
       Seq [ ForEach "i" (True, pset "is") $
             Seq [ recvAny 1 "x"
                 , sendb 0 (v "x") (T.ECon "Left" [] ())
@@ -267,10 +269,10 @@ workSteal =
                 ]
           ]
     , Par ["x1"] (Singleton "xs") $
-        One (Unfolded "x1" "xs") $
+        One (Unfolded "x1" "xs") True $
           While "loop0" $ Seq [
               sendb 1 (p "queue") (v "x1")
-            , recv 0 "queue" "what"
+            , recvAny 0 "what"
             , Case (v "what")
               [ ( T.ECon "Left" [] ()
                 , Continue "loop0"
@@ -286,21 +288,21 @@ workSteal =
 
 friendLoop =
   ( "friendloop"
-  , [ One (c "queue") $
+  , [ One (c "queue") True $
         ForEach "i" (True, pset "is") $
           sendb 1 (p "m") (T.ECon "Left" [] ())
-    , One (c "m") $
+    , One (c "m") True $
         ForEach "i1" (True, pset "is") $
           recv 1 "queue" "work"
     ]
   , []
   )
 
-gloop = FinPar [ One (c "queue") $
+gloop = FinPar [ One (c "queue") True $
                    Seq [ recvAny 1 "x"
                        , sendb 0 (v "x") (T.ECon "Left" [] ())
                        ]
-               , One (c "m") $
+               , One (c "m") True $
                    recvAny 1 "work"
                ]
 
@@ -308,11 +310,11 @@ gloop = FinPar [ One (c "queue") $
 mapreduce0 =
   ( "mapreduce-mini0"
   , [ Par ["i0", "i1"] (Zipped 2 (Singleton "is")) $
-        FinPar [ One (c "queue") $
+        FinPar [ One (c "queue") True $
                    Seq [ recvAny 1 "x"
                        , sendb 0 (v "x") (T.ECon "Left" [] ())
                        ]
-               , One (c "m") $
+               , One (c "m") True $
                    recvAny 1 "work"
                ]
     , worker 
@@ -321,7 +323,7 @@ mapreduce0 =
   )
   where
     worker = Par ["x1"] (Singleton "xs") $
-        One (Unfolded "x1" "xs") $
+        One (Unfolded "x1" "xs") True $
           While "loop0" $ Seq [
               sendb 1 (p "queue") (v "x1")
             , recv 0 "queue" "what"
@@ -337,7 +339,7 @@ mapreduce0 =
 
 mapreduce =
   ( "mapreduce-mini"
-  , [ One (c "queue") $
+  , [ One (c "queue") True $
       Seq [ ForEach "i" (True, pset "is") $
             Seq [ recvAny 1 "x"
                 , sendb 0 (v "x") (T.ECon "Left" [] ())
@@ -348,7 +350,7 @@ mapreduce =
                 ]
           ]
     , Par ["x1"] (Singleton "xs") $
-        One (Unfolded "x1" "xs") $
+        One (Unfolded "x1" "xs") True $
           While "loop0" $ Seq [
               sendb 1 (p "queue") (v "x1")
             , recv 0 "queue" "what"
@@ -361,7 +363,7 @@ mapreduce =
                 )
               ] Nothing
             ]
-    , One (c "m") $
+    , One (c "m") True $
       ForEach "i1" (True, pset "is") $ recvAny 1 "work"
     ]
   , []
@@ -369,17 +371,34 @@ mapreduce =
 
 test8_shouldFail
   = [ Par ["x"] (Singleton "xs") $
-            One (c "x") $
+            One (c "x") True $
              Seq [recv 2 "p" "foo", recv 1 "q" "xgloop"]
-        , One (c "p") $
+        , One (c "p") True $
             ForEach "x" (True, pset "xs") (send 0 "x" "mymsg")
-        , One (c "q") $
+        , One (c "q") True $
             ForEach "x" (True, pset "xs") (send 1 "x" "amsg")
         ]
 
+testForever =
+  ( "forever"
+  , [ One (c "q") True $ While "l" (recv 0 "p" "x")
+    , One (c "p") True $ While "m" (send 0 "q" "y")
+    ]
+  , []
+  )
 
 testState =
-  initState { symSends = Env.fromList [(t 1, ["xs"])]
+  initState { symSends   = Env.fromList [(t 1, ["xs"])]
+            , concrSends = Env.fromList [(t 0, ["queue"])]
             }
 
-doTest q = findRewrite q testState
+doTest q = fst $ findRewrite q testState
+
+
+zoop = FinPar [ One (c "queue") True $
+                   Seq [ recvAny 1 "x"
+                       , sendb 0 (v "x") (T.ECon "Left" [] ())
+                       ]
+               , One (c "m") True $
+                   recvAny 1 "work"
+               ]
