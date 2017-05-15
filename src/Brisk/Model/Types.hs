@@ -449,7 +449,7 @@ instance (Pretty b, Eq b) => Pretty (EffExpr b a) where
     = text "letrec" <+> ppPrec z b <+> equals <+> ppPrec 0 e $$ text "in" <+> ppPrec z b
   ppPrec _ (EType t _)      = text "@" <> pp t
   ppPrec _ (EUnion es)
-    = hcat (punctuate (text "+") (ppPrec 0 <$> es))
+    = hcat (punctuate (text "⊔") (ppPrec 0 <$> es))
 
 instance Pretty PrimOp where
   ppPrec _ Self     = text "$self"

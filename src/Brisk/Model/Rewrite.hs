@@ -9,7 +9,6 @@ module Brisk.Model.Rewrite where
 
 import Data.Function
 import Data.List as L
-  (sort, sortBy, reverse, nub, lookup, foldl', group, groupBy, (\\), intersperse, intercalate)
 import Data.Char
 import Data.Maybe
 import Control.Monad.State
@@ -38,6 +37,9 @@ splitContext (One p sp s)
 splitContext (Par xs bag s)
   = do (pre, post) <- splitContext s
        return (Par xs bag pre, Par xs bag post)
+splitContext (Sum xs bag s)
+  = do (pre, post) <- splitContext s
+       return (Sum xs bag pre, Sum xs bag post)
 splitContext (Ast s)
   = do (pre, post) <- splitContext s
        return (Ast pre, Ast post)
@@ -69,21 +71,22 @@ dbg m x = Dbg.trace (m ++ ": " ++ ppShow x) x
 dbgPP :: Pretty a => String -> a -> a  
 dbgPP m x = Dbg.trace (m ++ ": " ++ render (pp x) ++ "\n") x
 
-collectStmts :: ProcessIdSpec -> IceTStmt s -> RewriteContext s
-collectStmts p = go
-  where
-    go (ForEach x (_, T.EVar{T.varId = xs}) s)
-      = Par [x] (Singleton xs) (One p False s)
-    go (While x s)
-      = Ast (One p False s)
-    go s
-      = One p True s
+-- collectStmts :: ProcessIdSpec -> IceTStmt s -> RewriteContext s
+-- collectStmts p = go
+--   where
+--     go (ForEach x (_, T.EVar{T.varId = xs}) s)
+--       = Par [x] (Singleton xs) (One p False s)
+--     go (While x s)
+--       = Ast (One p False s)
+--     go s
+--       = One p True s
 
 runAssign :: RWAnnot s => RewriteContext s -> RWM s (RewriteContext s)
-runAssign (One p split (Assgn x t (T.ECase t' e alts Nothing l)))
+runAssign (One p split (Assgn x t rhs@(T.ECase t' e alts Nothing l)))
   -- Here we can see if we're removing a join
   = do e' <- eval p e
        case e' of
+         -- OMG THIS CODE IS SO GROSS FIX ME PLEASE
          T.EUnion es -> do
            es' <- dbgPP "es!!" <$> mapM (\e -> eval p (dbgPP "new expr" $ T.ECase t' e alts Nothing l)) es
            case L.nub es' of
@@ -91,7 +94,8 @@ runAssign (One p split (Assgn x t (T.ECase t' e alts Nothing l)))
                modify $ \st -> st { consts = Env.addsEnv (consts st) [((p,x), e)] }
                return $ dbgPP "aha!" (One p split Skip)
              _   -> return (One p split Skip)
-         _ -> return (One p split Skip)
+         _ -> eval p rhs >>= \e -> do modify $ \st -> st { consts =  Env.addsEnv (consts st) [((p,x), e)] }
+                                      return (One p split Skip)
   -- where
   --   s'    = Case e alts' Nothing
   --   alts' = [(T.ECon c (flip T.EVar T.dummyAnnot <$> xs) T.dummyAnnot,
@@ -129,17 +133,33 @@ runSimplifyCase (Par x xs c@(One p@(Unfolded u us) sp s))
        -- ifte (ofList alts >>= unifies p eVal)
 runSimplifyCase _
   = mzero
+
+pullUpMatch :: RWAnnot s
+            => RewriteContext s
+            -> RWM s (RewriteContext s)
+pullUpMatch (One p sp (Seq ((Case e alts md):ss)))
+  | not (isContinue (head ss))
+  = return $ One p sp (seqStmts (case' : s1))
+  where
+    case'    = Case e [ (p, seqStmts (s:s0)) | (p,s) <- alts ]
+                      ((seqStmts . (:s0)) <$> md)
+    (s0, s1) = (takeWhile (not . isContinue) ss, dropWhile (not . isContinue) ss)
+pullUpMatch _
+  = mzero
+
+isContinue (Continue _) = True
+isContinue _            = False
   
 runSend :: RWAnnot s
         => RewriteContext s
         -> RWM s (RewriteContext s)
 runSend (One p sp (Send t q m))
-  = do c <- gets consts
-       qPid <- dbgPP "consts???" (p, c) `seq` getPidMaybe p (dbgPP "pidMaybe" q)
-       mv   <- dbgPP "eval2" <$> eval p (dbgPP "eval1" m)
-       enqueue t pPid (dbgPP "qPid" qPid) mv
+  = do c    <- gets consts
+       qPid <- getPidMaybe p q
+       mv   <- eval p m
+       enqueue t pPid qPid mv
        
-       return (One p sp Skip)
+       return (dbgPP "runSend" $ One p sp Skip)
          where
            pPid = specPid p
 runSend _
@@ -149,15 +169,15 @@ runRecvFrom :: RWAnnot s
             => RewriteContext s
             -> RWM s (RewriteContext s)
 runRecvFrom (One q sp (Recv t (Just p) mx))
-  = do pPid <- dbgPP "getPidMaybe" <$> getPidMaybe q p
-       buf  <- dbgPP "buffers" <$> gets buffers
-       msg  <- dbgPP "msg" <$> dequeue t pPid qPid
+  = do pPid <- dbgPP "pPid" <$> getPidMaybe q p
+       buf  <- gets buffers
+       msg  <- dequeue t pPid qPid
 
        maybeM mx $ \x -> do
         bind (q, x) msg
         seqTrace (XAssgn qPid x pPid msg)
 
-       return (dbgPP "asdf" $  One q sp Skip)
+       return (One q sp Skip)
          where
            qPid = specPid q
 runRecvFrom (One q sp (Recv t Nothing mx))
@@ -174,28 +194,39 @@ runCollect c
   = do Just c' <- collectContext c
        return c'
 
+splitCase (One p sp s@(Case _ _ _))
+  = return (One p sp s, Skip)
+splitCase (One p sp (Seq (s0@(Case _ _ _):ss)))
+  = return (One p sp s0, seqStmts ss)
+splitCase _
+  = mzero
+
 doCaseStmt :: RWAnnot s
            => [RewriteContext s]
            -> RWM s [RewriteContext s]
 doCaseStmt cs
-  = do ([One p sp (Case e alts md)], ps) <- ofList $ partitions cs
-       eVal                           <- eval p e 
+  = do ([c], ps)                          <- ofList $ partitions cs
+       (One p sp (Case e alts md), rest)  <- splitCase c
+       eVal                               <- eval p e 
        ifte (ofList alts >>= unifies p eVal)
-            (runMatch p sp ps) $ do
-              (ps', ps'') <- ofList $ partitions (dbgPP "caseStmt" ps)
-              rewriteAll (\s -> One p sp s : ps') e alts md
-              return $ dbgPP "caseStmt Done" ps''
+            (runMatch p sp rest ps) $ do
+              (ps', ps'') <- ofList $ partitions ps
+              (pre, post) <- ofList $ choosePrefixes ps'
+              dbgPP "Rewrite Case" (One p sp (Case e alts md) : pre) `seq`
+                rewriteAll (\s -> One p sp s : pre) e alts md
+              return $ dbgPP "caseStmt Done" ([One p sp rest] ++ post ++ ps'')
   where
     -- Just reduce the case statement to the single matching branch
     runMatch :: ProcessIdSpec
              -> Bool
+             -> IceTStmt s
              -> [RewriteContext s]
              -> ([((ProcessIdSpec, Id), IceTExpr s)], IceTStmt s)
              -> RWM s [RewriteContext s]
-    runMatch p sp ps (env, s)
+    runMatch p sp rest ps (env, s)
       = do modify $ \st -> st { consts = Env.addsEnv (consts st) env }
            c <- gets consts
-           return (One p sp s : ps)
+           return (One p sp (seqStmts ([s, rest])) : ps)
 
     -- Need to rewrite *each* branch now...
     rewriteAll f e alts Nothing
@@ -216,12 +247,13 @@ doCaseStmt cs
       = do modify $ \st -> st { trace  = Skip
                               , consts = e0
                               }
+
            runRewrites null (dbgPP "rewrite ==>" $ concatMap filterSkips $ f s)
            b' <- gets buffers
            cond $ buffersUnchanged b b'
            t' <- gets trace
-           e  <- gets consts
-           return (e:es, (c,t') : ts)
+           e  <- dbg "rewrote!" () `seq` gets consts
+           return ((e:es, (c,t') : ts))
     
 unifies p e1@(T.ECon c xs l) (e2@(T.ECon c' xs' l'), s)
   | c == c' && length xs == length xs'
@@ -255,13 +287,34 @@ doReactiveWhile :: RWAnnot s
                 => [RewriteContext s]
                 -> RWM s [RewriteContext s]
 doReactiveWhile cs
-  = do (Ast s, rest) <- ofList css
-       cond $ rest /= []
-       runRewrites finished $ dbgPP "doReactiveWhile" (s : rest)
+  = do css <- collectSome cs
+       let (while, notwhile) = L.partition isAst css
+       cond $ while /= []
+
+       t0 <- gets trace
+       modify $ \st -> st { trace = Skip }
+       runRewrites (all continue) [c | Ast c <- while]
+       modify $ \st -> st { trace = seqStmts [ t0, While "*" (trace st) ] }
+
+       return notwhile
   where
-    finished [One _ _ (Continue _)] = True
-    finished _ = False
-    css = [ (c, rest) | ([c@(Ast _)], rest) <- partitions cs ]
+    continue (One _ _ (Continue l)) = True
+    continue (Par _ _ c)            = continue c
+    continue (Sum _ _ c)            = continue c
+    continue (FinPar cs)            = all continue cs
+    continue _                     = False
+    isAst (Ast _)                  = True
+    isAst _                        = False
+  -- = do (Ast s, rest) <- ofList css
+  --      cond $ rest /= []
+  --      runRewrites (finished cs) $ (s : rest)
+  -- where
+  --   isContinue (One _ _ (Continue _)) = True
+  --   isContinue _ = False
+  --   finished ps ps' = all isContinue ps' && length ps == length ps'
+  --   -- finished [One _ _ (Continue _)] = True
+  --   -- finished _ = False
+  --   css = [ (c, rest) | ([c@(Ast _)], rest) <- partitions cs ]
 
 --------------------------------------------------------------------------------
 ofList :: MonadPlus m => [a] -> m a
@@ -421,16 +474,18 @@ doInduction :: RWAnnot s
             => [RewriteContext s]
             -> RWM s [RewriteContext s]
 doInduction ps
-  = do let ps'                          = collectAndMerge ps
+  = do (pre, post) <- ofList (choosePrefixes ps)
+       let ps'                          = collectAndMerge pre
        (toSkipPre, [], toSame) <- ofList $ chooseInduction $ ps'
        consts0                         <- gets consts
 
        -- let consts1 = instantiateConsts consts0
+
        (p0, toSkipPre')                <- instantiate toSkipPre
 
        -- Instantiate quantified constants of instantiated process
        -- (Assuming one for now)
-       let consts1       = maybe consts0 (instantiateConsts consts0) p0
+       let consts1       = dbgPP "consts" $ maybe consts0 (instantiateConsts consts0) p0
 
        b0 <- gets buffers
        t0 <- gets trace
@@ -449,7 +504,8 @@ doInduction ps
                         , trace  = seqStmts [t0, iterateTrace toSkipPre t1]
                         }
        
-       return $ ({- toSkipPost ++ -} toSame)
+       -- return $ ({- toSkipPost ++ -} toSame)
+       return $ dbgPP "OUT" ({- toSkipPost ++ -} toSame `stitchContexts` post)
   where
     iterateTrace (Par xs bag _) t
       = ForEach ("(" ++ intercalate "," xs ++ ")")
@@ -466,18 +522,31 @@ doInduction ps
     instantiate p
       = mzero
 
-doCaseSplit :: RWAnnot s
-            => [RewriteContext s]
-            -> RWM s [RewriteContext s]
-doCaseSplit ps
-  = do -- let ps' = concat $ collectAndMerge ps
-       (p, p0, rest)  <- chooseCaseSplit ps
+doInstantiateSum :: RWAnnot s
+                 => [RewriteContext s]
+                 -> RWM s [RewriteContext s]
+doInstantiateSum ps
+  = do (p@(Sum _ _ _), p0, rest) <- chooseCaseSplit ps
        (p0pid@(Unfolded x xs), rest') <- do
          p0pid <- contextPid p0
          rest' <- freshInstOther p0pid rest
          return (p0pid, rest')
        seqTrace (Assgn x Nothing (T.ESymElt (T.EVar xs T.dummyAnnot) T.dummyAnnot))
-       runRewrites ((== 1) . length) (p0 : rest')
+       return (p0 : rest')
+       
+
+doCaseSplit :: RWAnnot s
+            => [RewriteContext s]
+            -> RWM s [RewriteContext s]
+doCaseSplit ps
+  = do -- let ps' = concat $ collectAndMerge ps
+       (p@(Par _ _ _), p0, rest)  <- chooseCaseSplit ps
+       (p0pid@(Unfolded x xs), rest') <- do
+         p0pid <- contextPid p0
+         rest' <- freshInstOther p0pid rest
+         return (p0pid, rest')
+       seqTrace (Assgn x Nothing (T.ESymElt (T.EVar xs T.dummyAnnot) T.dummyAnnot))
+       runRewrites ((== 1) . length) $ dbgPP "case split" (p0 : rest')
        return [p]
        -- consts0     <- gets consts
        -- let consts1  = maybe consts0 (instantiateConsts consts0) $ contextPid p
@@ -540,13 +609,27 @@ chooseCaseSplit ps
   -- = do (p, s, rest) <- ofList [ (Par ps bag s, s, ps') | ([Par ps bag s], ps') <- partitions ps ]
   --      case s of
   --        (Unfolded 
-  = do ([Par ps bag (One p sp s)], ps') <- ofList $ partitions ps
-       case p of
-         Unfolded x xs -> do x0 <- fresh x
-                             return (Par ps bag (One p sp s), One (Unfolded x0 xs) sp (substStmt x (pidLit x0) s), ps')
+  = do ([c]{-[Par ps bag (One p sp s)]-}, ps') <- ofList $ partitions ps
+       case c of
+         Par ps bag (One p sp s) ->
+           case p of
+             Unfolded x xs -> do
+               x0 <- fresh x
+               return  (Par ps bag (One p sp s)
+                       ,One (Unfolded x0 xs) sp (substStmt x (pidLit x0) s)
+                       ,ps')
+         Sum ps bag (One p sp s) ->
+           case p of
+             Unfolded x xs -> do
+               x0 <- fresh x
+               return ( Sum ps bag (One p sp s)
+                      , One (Unfolded x0 xs) sp (substStmt x (pidLit x0) s)
+                      , ps'
+                      )
          _ -> mzero
 
-chooseInduction :: [[RewriteContext s]] -> [(RewriteContext s, [RewriteContext s], [RewriteContext s])]
+chooseInduction :: [[RewriteContext s]]
+                -> [(RewriteContext s, [RewriteContext s], [RewriteContext s])]
 chooseInduction []
   = []
 chooseInduction (c:cs)
@@ -558,14 +641,17 @@ chooseInduction (c:cs)
     maybeMerge (m:ms) = foldl' (\mc -> (mc >>=). mergeContexts) (Just m) ms
     (pres, posts)                = unzip (split <$> c)
     split c@(Par x y s)          = (c, Nothing)
+    split c@(Sum x y s)          = (c, Nothing)
     split c@(Ast s)              = (c, Nothing)
     split c@(One b _ s)          = (c, Nothing)
     split c@(Sequence _ [c0])    = (c0, Nothing)
+    split c@(Sequence True ([c0,cs]))  = (c0, Just cs)
     split c@(Sequence True (c0:cs))  = (c0, Just (Sequence True cs))
     split c@(Sequence False (c0:cs)) = (c, Nothing)
 
 alwaysRules :: RWAnnot s => [RewriteContext s -> RWM s (RewriteContext s)]
-alwaysRules = [ applyToOneRule runAssign
+alwaysRules = [ pullUpMatch
+              , applyToOneRule runAssign
               , applyToOneRule runSend
               , applyToOneRule runRecvFrom
               , applyToOneRule runSimplifyCase
@@ -576,6 +662,7 @@ rules = [ doCaseStmt
         , doReactiveWhile
         , doWhileContExit
         , doCaseSplit 
+        , doInstantiateSum
         , doInduction 
         ]
 
@@ -620,11 +707,13 @@ runRewrites done ps
   | done ps
   = return ps
 runRewrites done ps
-  = do ifte (runRewriteSingle done ps)
-            (\ps' -> do
-               let psFilter = concatMap filterSkips ps'
-               runRewrites done psFilter `mplus` runRewritesGroup done psFilter)
-            (runRewritesGroup done ps)
+  = do ps' <- once $ (runRewriteSingle done ps `mplus` runRewritesGroup done ps)
+       runRewrites done (concatMap filterSkips ps')
+  -- = do ifte (runRewriteSingle done ps)
+  --           (\ps' -> do
+  --              let psFilter = concatMap filterSkips ps'
+  --              runRewrites done psFilter{- `mplus` runRewritesGroup done psFilter -})
+  --           (runRewritesGroup done ps)
 
 runRewriteSingle :: RWAnnot s
                  => ([RewriteContext s] -> Bool)
@@ -646,46 +735,16 @@ runRewritesGroup done ps
  | done ps
  = return ps
 runRewritesGroup done ps
-  = do -- 1. Choose the processes to participate in the rewrite
-       -- (somePs, otherPs)           <- ofList $ partitions ps
-       -- cond $ not (null somePs)
-
-       -- 2. Choose a prefix of each process
-       (someStmts, otherStmts)     <- ofList $ choosePrefixes ps 
-
-       -- -- 2a. Do some collections?
-       -- someStmtsColl               <- collectSome someStmts
-
-       -- 3. Choose which prefixes we expect to disappear
-       -- (toSkip, toNotSkip, marked) <- ofList $ chooseToSkips someStmts
-
-       -- -- 4. Inline the merge rule here
-       -- (toMerge, toNotMerge)       <- chooseMerges toSkip
-
-       -- Just merged                 <- if null toMerge then
-       --                                  return (Just [])
-       --                                else
-       --                                  fmap return <$> mergeAllContexts toMerge
-
-       -- -- Finally do the rewrite
-       -- let rewriteStmts = merged ++ toNotMerge -- These should go away
-       --                 ++ toNotSkip           -- These shold remain. Necessary??
-       let rewriteStmts = someStmts -- toSkip ++ toNotSkip
-       
-       doRewrite                   <- ofList rules
-       someStmts'                  <- dbgPP ("Rewrote:\n"++render(pp(someStmts))++"\n"++render(pp(otherStmts))++"\n") <$>
-                                        (once $ doRewrite ({- dbgPP "trying:" -} rewriteStmts))
+  = do doRewrite                   <- ofList rules
+       ps'                  <- {- dbgPP ("Rewrote:\n"++render(pp(someStmts))++"\n"++render(pp(otherStmts))++"\n") <$> -}
+                                        (doRewrite ({- dbgPP "trying:" -} ps))
 
        -- Marked is set up so that the list of processes is still aligned.
        -- This works if the processes we expected to "go away" actually do,
        -- hence the following check:
        -- cond $ concatMap filterSkips someStmts' == concatMap filterSkips toNotSkip
-       cond $ someStmts' /= rewriteStmts
-
-       -- let merged = someStmts' `joinContexts` concatMap filterSkips otherStmts
-       let merged = stitchContexts (concatMap filterSkips someStmts')
-                                   (concatMap filterSkips otherStmts)
-       once $ runRewrites done (dbgPP "merged" merged)
+       cond $ ps' /= ps
+       runRewrites done $ concatMap filterSkips ps'
 
 stitchContexts cs cs'
   = let (cs'', rest) = L.foldl' go ([], cs') cs
@@ -727,6 +786,9 @@ joinContext c1 c2
 collectContext :: RWAnnot s
                => RewriteContext s
                -> RWM s (Maybe (RewriteContext s))
+collectContext (Par x xs c)
+  = do Just (Ast c') <- collectContext c
+       return . Just $ Ast (Sum x xs c')
 collectContext (One p sp (While l s))
   | whileReactive l s
   = return . Just $ Ast (One p sp s)
@@ -760,6 +822,7 @@ filterSkips c = go c
     go :: RWAnnot s => RewriteContext s -> [RewriteContext s]
     go (FinPar xs)   = concatMap filterSkips xs
     go (Par x xs s)  = Par x xs <$> filterSkips s
+    go (Sum x xs s)  = Sum x xs <$> filterSkips s
     go (Ast c)       = Ast <$> filterSkips c
     go (One p _ Skip) = []
     go (One p sp s)   = [One p sp s]
@@ -1398,3 +1461,4 @@ msgSends s = sends
     sends        = queryMsgTys send1 recv1 [] s
 
 pidLit p = T.EVal (Just (T.CPid p)) T.dummyAnnot
+ 

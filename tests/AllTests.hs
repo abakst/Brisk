@@ -381,8 +381,20 @@ test8_shouldFail
 
 testForever =
   ( "forever"
-  , [ One (c "q") True $ While "l" (recv 0 "p" "x")
-    , One (c "p") True $ While "m" (send 0 "q" "y")
+  , [
+      One (c "p") True $ While "m" (Seq [send 0 "q" "y", Continue "m"])
+    , One (c "q") True $ While "l" (Seq [recv 0 "p" "x", Continue "l"])
+    ]
+  , []
+  )
+
+testForeverPi =
+  ( "foreverPi"
+  , [
+      One (c "q") True $ While "l" (Seq [recvAny 1 "x", Continue "l"])
+    , Par ["x"] (Singleton "xs") $
+        One (Unfolded "x0" "xs") True $
+          While "m" (Seq [send 1 "q" "y", Continue "m"])
     ]
   , []
   )
@@ -393,7 +405,7 @@ testState =
             }
 
 doTest q = fst $ findRewrite q testState
-
+checkTrace q = trace . snd $ findRewrite q testState
 
 zoop = FinPar [ One (c "queue") True $
                    Seq [ recvAny 1 "x"
