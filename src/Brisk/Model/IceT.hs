@@ -29,13 +29,15 @@ data IceTStmt_ b a = Send IceTType (E.EffExpr b a) (E.EffExpr b a)
                    | Case (E.EffExpr b a) [(E.EffExpr b a, IceTStmt_ b a)] (Maybe (IceTStmt_ b a))
                    | ForEach E.Id (Bool, E.EffExpr b a) (IceTStmt_ b a) 
                    | NonDet IceTType
-                   | While E.Id (IceTStmt_ b a)
+                   | While E.Id [E.Id] (IceTStmt_ b a)
                    | Fail
                    | Skip
                    | Continue E.Id
                    | Exec (E.EffExpr b a)
                    -- Only occurs in rw traces, XAssgn p x p e ==> (x_p := eval(p,e))
                    | XAssgn b b b (E.EffExpr b a)
+                   | Assert (E.Pred b a)
+                   | Assume (E.Pred b a)
                   deriving (Show, Eq)
 type IceTStmt = IceTStmt_ E.Id
 
@@ -68,7 +70,7 @@ queryMsgTys f g
     go b (Case _ as d)   = let z = foldl' go b (snd <$> as) in
                            maybe z (go z) d
     go b (ForEach _ _ s) = go b s
-    go b (While _ s)     = go b s
+    go b (While _ _ s)   = go b s
     go b _               = b
 
 substStmt :: (E.Annot a) => E.Id -> IceTExpr a -> IceTStmt a -> IceTStmt a
@@ -80,7 +82,7 @@ substStmt x e = go
     go (Seq ss)        = Seq (go <$> ss)
     go (Case e alts d) = Case (sub e) (fmap go <$> alts) (go <$> d)
     go (ForEach x (b, e) s) = ForEach x (b, sub e) (go s)
-    go (While l s)     = While l (go s)
+    go (While l xs s)  = While l xs (go s)
     go (Recv t w mx)   = Recv t (sub <$> w) mx
     go s               = s
 
@@ -413,7 +415,7 @@ fromApp l s erec@(E.ERec f e l') as
        modify $ \s -> s { recFns = (goto,f,xs) : recFns s }
        (stmt, ebody) <- fromEffExp s' body Nothing
        modify $ \s -> s { recFns = tail (recFns s) }
-       let (rX, while) = mkWhileLoop l goto f stmt ebody
+       let (rX, while) = mkWhileLoop l xs goto f stmt ebody
            initArgs    = mkAssigns (zip xs as)
            app         = seqStmts [initArgs, while]
        return (app, Nothing)
@@ -442,8 +444,8 @@ mkAssigns xas
     nonTrivialAssign x (E.EVar y _) = x /= y
     nonTrivialAssign _ _            = True
 
-mkWhileLoop l goto f stmt e
-  = (retx, While goto (seqStmts ([stmt] ++ mret)))
+mkWhileLoop l xs goto f stmt e
+  = (retx, While goto xs (seqStmts ([stmt] ++ mret)))
   where
     mret = maybe [] (return . mkAssgn) e
     retx = "ret_" ++ f
@@ -606,8 +608,8 @@ anf s@(Assgn x t e)
        return $ stitch bs (Assgn x t y)
 anf (Seq ss)
   = seqStmts <$> mapM anf ss
-anf (While l s)
-  = While l <$> anf s
+anf (While l xs s)
+  = While l xs <$> anf s
 anf (Case e es d)
   = do es'      <- mapM anfAlt es
        d'       <- mapM anf d
@@ -702,7 +704,7 @@ instance Pretty (IceTStmt a) where
     = text "iter" <+> pp x <+> text "in" <+> pp e <> colon $$
       nest 2 (ppPrec 0 s)
 
-  ppPrec _ (While l s)
+  ppPrec _ (While l xs s)
     = text "while true" <> colon $$
       nest 2 (ppPrec 0 s)
 

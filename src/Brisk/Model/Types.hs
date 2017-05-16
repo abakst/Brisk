@@ -59,19 +59,19 @@ type Id = String
 -----------------------------------------------  
 --  Specification Language (Preds, Exprs, Types)
 ----------------------------------------------- 
-data Pred b a = Rel Op (Pred b a) (Pred b a)
-              | PVal b [Pred b a]
-              | PConst Const
-              | PEffect (PureExpr b a)
-              | PTrue
+data Pred b a = Top | Bot | Conj [Pred b a] | Disj [Pred b a] | LNot (Pred b a)
+              | PVar String [EffExpr b a]
+              | Pred b a :==>: Pred b a
+              | CHC [b] (Pred b a) (Pred b a)
+              | BRel Op (EffExpr b a) (EffExpr b a)
               deriving (Eq, Show)
 
-instance Functor (Pred b)  where
-  fmap f (Rel o p1 p2) = Rel o (fmap f p1) (fmap f p2)
-  fmap f (PVal b ps)   = PVal b (fmap f <$> ps)
-  fmap f (PEffect e)   = PEffect (fmap f e)
-  fmap f (PConst c)    = PConst c
-  fmap _ PTrue         = PTrue
+-- instance Functor (Pred b)  where
+--   fmap f (Rel o p1 p2) = Rel o (fmap f p1) (fmap f p2)
+--   fmap f (PVal b ps)   = PVal b (fmap f <$> ps)
+--   fmap f (PEffect e)   = PEffect (fmap f e)
+--   fmap f (PConst c)    = PConst c
+--   fmap _ PTrue         = PTrue
 
 data Const = CInt Int          
            | CPid Id
@@ -84,8 +84,8 @@ data Op = Eq | Le | NEq | Plus | Minus
         deriving (Eq, Show)
 
 litInt i a = EVal (Just (CInt (fromInteger i))) a
-ePlus  = Rel Plus
-eMinus = Rel Minus
+ePlus  = BRel Plus
+eMinus = BRel Minus
 
 data Type b = -- ^ Essentially a mirror of GHC's Type  
     TyVar b
@@ -471,12 +471,24 @@ instance Pretty Const where
   ppPrec _ (CPidSet ps) = text "%" <> text ps
 
 instance (Pretty b, Pretty (EffExpr b a)) => Pretty (Pred b a) where
-  ppPrec _ (Rel o p1 p2) = parens (pp p1) <+> pp o <+> parens (pp p2)
-  ppPrec _ (PVal n [])   = pp n
-  ppPrec _ (PVal n xs)   = parens (pp n <+> hcat (pp <$> xs))
-  ppPrec _ (PEffect e)   = pp e
-  ppPrec _ (PConst c)    = pp c
-  ppPrec _ PTrue         = text "true"
+  ppPrec _ Top         = text "⊤"
+  ppPrec _ Bot         = text "⊥"
+  ppPrec _ (p :==>: q) = parens (pp p <+> text "⇒" <+> pp q)
+  ppPrec _ (CHC xs p q) = text "∀" <> brackets (hcat $ list xs)
+                                      <> text "."
+                                      <+> pp (p :==>: q)
+  ppPrec _ (PVar p xs) = text p <+> (hcat $ list xs)
+  ppPrec _ (Conj [φ]) = pp φ
+  ppPrec _ (Disj [φ]) = pp φ
+  ppPrec _ (Conj φs)  = text "∧" <> brackets (vcat $ list φs)
+  ppPrec _ (Disj φs)  = text "∨" <> brackets (hcat $ list φs)
+  ppPrec _ (LNot φ)   = text "¬" <> parens (pp φ)
+  ppPrec _ (BRel Eq e1 e2)
+    = (pp e1 <+> text "=" <+> pp e2)
+  ppPrec _ (BRel Le e1 e2)
+    = (pp e1 <+> text "<=" <+> pp e2)
+
+list xs = punctuate comma (pp <$> xs)
 
 instance Pretty Op where
   ppPrec _ Eq    = text "="
@@ -595,12 +607,12 @@ fvExpr (EType t _)      = Set.empty
 fvAlts :: (Avoid b, Annot a, Ord b) => (b, [b], EffExpr b a) -> Set.Set b
 fvAlts (_, xs, e) = fv e Set.\\ (Set.fromList xs)
 
-fvPred :: (Avoid b, Annot a, Ord b) => Pred b a -> Set.Set b
-fvPred (PVal v ps)   = Set.unions (fvPred <$> ps) Set.\\ Set.singleton v
-fvPred (Rel _ p1 p2) = fvPred p1 `Set.union` fvPred p2
-fvPred (PEffect e)   = fv e
-fvPred PTrue         = Set.empty
-fvPred (PConst _)    = Set.empty
+-- fvPred :: (Avoid b, Annot a, Ord b) => Pred b a -> Set.Set b
+-- fvPred (PVal v ps)   = Set.unions (fvPred <$> ps) Set.\\ Set.singleton v
+-- fvPred (Rel _ p1 p2) = fvPred p1 `Set.union` fvPred p2
+-- fvPred (PEffect e)   = fv e
+-- fvPred PTrue         = Set.empty
+-- fvPred (PConst _)    = Set.empty
 
 class Avoid b where
   avoid :: Set.Set b -> b -> b

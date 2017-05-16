@@ -55,6 +55,7 @@ library
   build-depends:       base >=4 && < 5
                      , syb
                      , binary
+                     , process
                      , bytestring
                      , utf8-string
                      , ghc

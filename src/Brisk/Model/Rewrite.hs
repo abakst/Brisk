@@ -270,14 +270,14 @@ doWhileContExit :: RWAnnot s
                 => [RewriteContext s]
                 -> RWM s [RewriteContext s]
 doWhileContExit cs
-  = do ([One p sp (While l s)], ps) <- ofList $ partitions cs
+  = do ([One p sp (While l xs s)], ps) <- ofList $ partitions cs
        let p' = One p sp s
        ps'                       <- runRewrites (all (finished p l)) (p' : ps)
-       return $ fmap (fixup p l s) ps'
+       return $ fmap (fixup p l xs s) ps'
   where
-    fixup pid l s (One p sp (Continue l'))
-     | l == l' = One p sp (While l s)
-    fixup pid _ _ c = c
+    fixup pid l xs s (One p sp (Continue l'))
+     | l == l' = One p sp (While l xs s)
+    fixup pid _ _ _ c = c
 
     finished pid l (One p _ (Continue l')) = p /= pid || l == l'
     finished pid l (One p _ _)              = p /= pid
@@ -294,7 +294,7 @@ doReactiveWhile cs
        t0 <- gets trace
        modify $ \st -> st { trace = Skip }
        runRewrites (all continue) [c | Ast c <- while]
-       modify $ \st -> st { trace = seqStmts [ t0, While "*" (trace st) ] }
+       modify $ \st -> st { trace = seqStmts [ t0, While "*" [] (trace st) ] }
 
        return notwhile
   where
@@ -465,7 +465,7 @@ partitionStmtUntilLoop (Seq ss)
   = (seqStmts $ takeWhile notLoop ss, seqStmts $ dropWhile notLoop ss)
   where
     notLoop (ForEach _ _ _) = False
-    notLoop (While _ _)     = False
+    notLoop (While _ _ _)   = False
     notLoop s               = True
 partitionStmtUntilLoop s
   = (s, Skip)
@@ -789,7 +789,7 @@ collectContext :: RWAnnot s
 collectContext (Par x xs c)
   = do Just (Ast c') <- collectContext c
        return . Just $ Ast (Sum x xs c')
-collectContext (One p sp (While l s))
+collectContext (One p sp (While l _ s))
   | whileReactive l s
   = return . Just $ Ast (One p sp s)
 collectContext (One p sp (ForEach x (_, T.EVar xs _) s))
