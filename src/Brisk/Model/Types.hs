@@ -17,7 +17,8 @@ import Brisk.Pretty
 import GHC.Generics
 import Brisk.UX
 import Brisk.Model.GhcInterface
-import Text.PrettyPrint.HughesPJ
+import Text.PrettyPrint.HughesPJ hiding (int)
+import qualified Text.PrettyPrint.HughesPJ as PP
 import Unique
 import PrelNames
 import TysWiredIn
@@ -64,14 +65,15 @@ data Pred b a = Top | Bot | Conj [Pred b a] | Disj [Pred b a] | LNot (Pred b a)
               | Pred b a :==>: Pred b a
               | CHC [b] (Pred b a) (Pred b a)
               | BRel Op (EffExpr b a) (EffExpr b a)
-              deriving (Eq, Show)
+              deriving (Eq, Show, Functor, Generic)
+instance (Serialize b, Serialize a) => Serialize (Pred b a)
 
--- instance Functor (Pred b)  where
---   fmap f (Rel o p1 p2) = Rel o (fmap f p1) (fmap f p2)
---   fmap f (PVal b ps)   = PVal b (fmap f <$> ps)
---   fmap f (PEffect e)   = PEffect (fmap f e)
---   fmap f (PConst c)    = PConst c
---   fmap _ PTrue         = PTrue
+-- (+) :: val $ \v -> v .= 
+----------------------------------------------- 
+-- Constructors for supported theories
+----------------------------------------------- 
+val :: Annot a => (EffExpr Id a -> Pred Id a) -> EffExpr Id a
+val f = EVal Nothing (Just ("$vv", f (EVar "$vv" dummyAnnot))) dummyAnnot
 
 data Const = CInt Int          
            | CPid Id
@@ -81,9 +83,10 @@ data Const = CInt Int
 instance Serialize Const 
 
 data Op = Eq | Le | NEq | Plus | Minus
-        deriving (Eq, Show)
+        deriving (Eq, Show, Generic)
+instance Serialize Op
 
-litInt i a = EVal (Just (CInt (fromInteger i))) a
+litInt i a = EVal (Just (CInt (fromInteger i))) Nothing a
 ePlus  = BRel Plus
 eMinus = BRel Minus
 
@@ -96,10 +99,29 @@ data Type b = -- ^ Essentially a mirror of GHC's Type
     deriving (Eq, Ord, Show, Generic)
 instance Serialize b => Serialize (Type b)
 
-type Subset b a = (b, T.Type, Pred b a)
+{-
+foo :: Process ()
+foo = x <- expect
+      assume (x .> 0 .&& ) 
+
+ltSpec x y = x .<=. y
+
+x .&& y = 
+x .> y :<=: EPred (BRel Gt x y)
+
+foo x y = 
+  α x < α y
+
+ltSpec :: Ord a => a -> a -> Bool
+ltSpec x y = abs x .<. abs y
+-}
+
+type Subset b a = (b, Pred b a)
 data EffExpr b a =
-   -- EVal    { valPred :: Subset b a, annot :: a }                -- ^ {v | p}
-   EVal    { valVal :: Maybe Const, annot :: a }
+   EVal    { valVal  :: Maybe Const
+           , valPred :: Maybe (Subset b a)
+           , annot   :: a
+           }
  | EVar    { varId :: b, annot :: a }                          -- ^ x
  | ESymElt { symSet :: EffExpr b a, annot :: a }
  | ECon    { conId :: b, conArgs :: [EffExpr b a], annot :: a }
@@ -136,6 +158,7 @@ instance (Serialize b, Serialize a) => Serialize (EffExpr b a)
 data PrimOp = Bind | Return | Fail | FoldM
             | Send | Recv | Self
             | Spawn | SymSpawn
+            | Assume | Assert
             deriving (Eq, Show, Generic)
 instance Serialize PrimOp
 
@@ -158,8 +181,8 @@ join :: Eq b => EffExpr b a -> EffExpr b a -> EffExpr b a
 join (EVar x l) (EVar y _)
   | x == y
   = EVar x l
-join e@(EVal c1 l) (EVal c2 _)
-  | c1 == c2  = e
+join e@(EVal c1 Nothing l) (EVal c2 Nothing _)
+  | c1 == c2 = e
 join e@(ECon c es l) (ECon c' es' _)
   | c == c'
   = ECon c (zipWith join es es') l
@@ -215,7 +238,7 @@ txExprPid f
 
 txExprVars :: (b -> a -> EffExpr b a) -> EffExpr b a -> EffExpr b a    
 txExprVars f
-  = txExprIds f (\p l -> EVal (Just (CPid p)) l)
+  = txExprIds f (\p l -> EVal (Just (CPid p)) Nothing l)
 
 txExprIds :: (b -> a -> EffExpr b a)
           -> (Id -> a -> EffExpr b a)
@@ -224,8 +247,8 @@ txExprIds :: (b -> a -> EffExpr b a)
 txExprIds f g
   = go
   where
-    go (EVar x l)               = f x l
-    go (EVal (Just (CPid x)) l) = g x l -- EVal (Just (CPid (f x))) l
+    go (EVar x l)                       = f x l
+    go (EVal (Just (CPid x)) Nothing l) = g x l -- EVal (Just (CPid (f x))) l
     go (ESymElt e l)            = ESymElt (go e) l
     go (ECon c es l)            = ECon c (go <$> es) l
     go (ELam b m l)             = ELam b (go m) l
@@ -407,8 +430,9 @@ instance Pretty b => Pretty (Type b) where
 instance (Pretty b, Eq b) => Pretty (EffExpr b a) where
   -- ppPrec _ (EVal (v,t,Rel Eq (PEffect (EVar v' _)) e) _)
   --   | v == v' = pp e
-  ppPrec _ (EAny t _)  = braces (pp t)
-  ppPrec _ (EVal mv _) = maybe (text "*") pp mv
+  ppPrec _ (EAny t _)    = braces (pp t)
+  ppPrec _ (EVal Nothing (Just (x,p)) _) = text "{" <+> pp x <+> text "|" <+> pp p <+> text "}"
+  ppPrec _ (EVal mv _ _) = maybe (text "*") pp mv
   ppPrec _ (ESymElt set _) = braces (text "_ ∈" <+> pp set)
   ppPrec _ (ECon c [] _)
     = pp c
@@ -428,6 +452,8 @@ instance (Pretty b, Eq b) => Pretty (EffExpr b a) where
     = parens (text "\\" <> spaces xs <+> text "->" $$ nest 2 (ppPrec 7 e))
     where
       (xs, e)         = collectArgs f
+  ppPrec z (EPrimOp Assert [p] _) = text "assert" <+> pp p
+  ppPrec z (EPrimOp Assume [p] _) = text "assume" <+> pp p
   ppPrec z (EPrimOp Bind [e1, e2] _) = text "do" <+> nest 3 (vcat (body e1 e2))
     where
       body e1 (ELam b e2 _) = [pp b <+> text "<-" <+> pp e1] ++ go e2
@@ -466,7 +492,7 @@ tuple :: [Doc] -> Doc
 tuple xs = parens (hcat (punctuate comma xs))
 
 instance Pretty Const where
-  ppPrec _ (CInt i)     = int i
+  ppPrec _ (CInt i)     = PP.int i
   ppPrec _ (CPid p)     = text "%" <> text p
   ppPrec _ (CPidSet ps) = text "%" <> text ps
 
@@ -542,8 +568,10 @@ substExpr flg s = go
     where
       go (EAny t l)      = EAny (go t) l
       go (ESymElt set l) = ESymElt (go set) l
-      go v@(EVal{}) = v
-      -- go v@(EVal (b,t,p) l) = (EVal (b, t, (substPred x a p)) l)
+      go v@(EVal{valPred = Just (x, p)})
+        = v { valPred = Just (x, substPred (restrSubst s [x]) p) }
+      go v@(EVal{})
+        = v
       go v@(EVar x _)
         = fromMaybe v $ apSubst s x
         -- WTF whas I doing here:
@@ -589,7 +617,8 @@ substExpr flg s = go
 fvExpr :: (Avoid b, Annot a, Ord b) => EffExpr b a -> Set.Set b
 fvExpr (EAny t _)      = fv t
 fvExpr (ESymElt s _)   = fv s
-fvExpr (EVal _ _)      = Set.empty
+fvExpr (EVal _ s _)    = flip (maybe Set.empty) s $ \(x,y) ->
+                           fvPred y Set.\\ Set.fromList[x]
 fvExpr (EVar x _)      = Set.singleton x
 fvExpr (ECon x as _)   = Set.unions (fv <$> as)
 fvExpr (ERec f e _)    = fv e Set.\\ Set.singleton f
@@ -607,12 +636,30 @@ fvExpr (EType t _)      = Set.empty
 fvAlts :: (Avoid b, Annot a, Ord b) => (b, [b], EffExpr b a) -> Set.Set b
 fvAlts (_, xs, e) = fv e Set.\\ (Set.fromList xs)
 
--- fvPred :: (Avoid b, Annot a, Ord b) => Pred b a -> Set.Set b
--- fvPred (PVal v ps)   = Set.unions (fvPred <$> ps) Set.\\ Set.singleton v
--- fvPred (Rel _ p1 p2) = fvPred p1 `Set.union` fvPred p2
--- fvPred (PEffect e)   = fv e
--- fvPred PTrue         = Set.empty
--- fvPred (PConst _)    = Set.empty
+-- substPred :: Subst Id (IceTExpr a)
+--           =>  [(T.Id, IceTExpr a)]
+--           -> VCPred a
+--           -> VCPred a
+substPred θ (φ :==>: ψ)    = substPred θ φ :==>: substPred θ ψ
+substPred θ (Conj φs)      = Conj (substPred θ <$> φs)
+substPred θ (Disj φs)      = Disj (substPred θ <$> φs)
+substPred θ (LNot φ)       = LNot $ substPred θ φ
+substPred θ (BRel o e1 e2) = BRel o (subst θ e1) (subst θ e2)
+substPred θ (PVar p xs)    = PVar p (subst θ <$> xs)
+substPred θ (CHC xs p q)   = CHC xs (substPred θ' p) (substPred θ' q)
+  where θ' = [ (x,e) | (x,e) <- θ, x `notElem` xs ]
+substPred θ φ              = φ
+
+fvPred :: (Avoid b, Annot a, Ord b) => Pred b a -> Set.Set b
+fvPred (p :==>: q)    = Set.union (fvPred p) (fvPred q)
+fvPred (Conj ps)      = Set.unions (fvPred <$> ps)
+fvPred (Disj ps)      = Set.unions (fvPred <$> ps)
+fvPred (LNot p)       = fvPred p
+fvPred (BRel o e1 e2) = Set.union (fv e1) (fv e2)
+fvPred (PVar p xs)    = Set.unions (fv <$> xs)
+fvPred (CHC xs p q)   = Set.union (fvPred p) (fvPred q) Set.\\ Set.fromList xs
+fvPred Top            = Set.empty
+fvPred Bot            = Set.empty
 
 class Avoid b where
   avoid :: Set.Set b -> b -> b

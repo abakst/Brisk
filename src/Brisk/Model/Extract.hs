@@ -304,7 +304,7 @@ mGenApp _ a1@(EApp _ _ l) a2
   = return $ EApp a1 a2 l
 mGenApp g e@(EVar x l) a2
   = return $ EApp e a2 l
-mGenApp _ e@(EVal _ _) _
+mGenApp _ e@(EVal _ _ _) _
   = return e
 mGenApp _ e1 e2
   = error ("App:\n" ++ render (pp e1 PP.$$ pp e2))

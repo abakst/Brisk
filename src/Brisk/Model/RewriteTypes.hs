@@ -83,7 +83,7 @@ data SetBag = Zipped Int SetBag
 bagIds :: RWAnnot s => SetBag -> IceTExpr s
 bagIds (Singleton x) = T.EVar x T.dummyAnnot
 bagIds (Zipped n b)  = T.EApp (T.EApp (T.EVar "$zip" T.dummyAnnot)
-                                      (T.EVal (Just (T.CInt n)) T.dummyAnnot)
+                                      (T.EVal (Just (T.CInt n)) Nothing T.dummyAnnot)
                                       T.dummyAnnot)
                               be T.dummyAnnot
   where

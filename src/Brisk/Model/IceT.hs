@@ -178,7 +178,7 @@ runIceT e = (st, procs)
     procs           =  anormalizeProc
                     .  mapProcStmt (substStmt "a" aPid)
                   <$> (Single "a" stmt : par st)
-    aPid            = E.EVal (Just (E.CPid "a")) E.dummyAnnot
+    aPid            = E.EVal (Just (E.CPid "a")) Nothing E.dummyAnnot
     ((stmt, _), st) = runState (fromTopEffExp e) (IS aPid 'b' 0 [] [] [] [] [])
 
 mapProcStmt :: (IceTStmt a -> IceTStmt a) -> IceTProcess a -> IceTProcess a
@@ -281,7 +281,7 @@ fromEffExp s (E.EPrRec acc x body acc0 xs l) mx
     foreach s exs a0 = seqStmts [ Assgn acc (getType a0) a0
                                 , ForEach x exs s
                                 ]
-    isPidSet (E.EVal (Just (E.CPidSet _)) _) = True
+    isPidSet (E.EVal (Just (E.CPidSet _)) Nothing _) = True
     isPidSet e = getType e
               == Just (E.TyConApp "Control.Distributed.Process.SymmetricProcess.SymProcessSet" []) -- Ugh
 
@@ -324,7 +324,7 @@ fromEffExp s v@(E.EVar x l) _
     go (Just (l, [])) = return (Continue l, Nothing)
     go _              = return (Exec v, Nothing)
 
-fromEffExp s e@(E.EVal x _) _    
+fromEffExp s e@(E.EVal x _ _) _    
   = return (Skip, Just e)
 
 fromEffExp s a@(E.EAny x _) _  
@@ -332,6 +332,12 @@ fromEffExp s a@(E.EAny x _) _
 
 fromEffExp s e@(E.EPrimOp E.Fail _ _) _
   = return (Fail, Nothing)
+
+fromEffExp s e@(E.EPrimOp E.Assert [E.EVal Nothing (Just (v, p)) _] _) _
+  = return (Assert p, Nothing)
+
+fromEffExp s e@(E.EPrimOp E.Assume [E.EVal Nothing (Just (v, p)) _] _) _
+  = return (Assume p, Nothing)
 
 fromEffExp s e@E.ECon {} _
   = return (Skip, Just e)
@@ -364,7 +370,7 @@ fromPure s (E.ECase t e alts d l)
 fromPure s e@(E.ECon c as l)
   = do as' <- mapM (fromPure s) as
        return (E.ECon c as' l)
-fromPure s e@(E.EVal _ l)
+fromPure s e@(E.EVal _ _ l)
   = return e
 fromPure s v@(E.EVar b l)
   = do ps <- gets params
@@ -375,7 +381,7 @@ fromPure s v@(E.EVar b l)
                            let d = E.EAny (E.EType t l) l in
                            lookupStoreDef s b d
                          Nothing ->
-                           let d = E.EVal Nothing l in
+                           let d = E.EVal Nothing Nothing l in
                            lookupStoreDef s b d
 fromPure s a@E.EAny{}
   = return a
@@ -481,7 +487,7 @@ fromSpawn :: (Show a, HasType a, E.Annot a)
 ---------------------------------------------------
 fromSpawn l s p x
   = do them <- newPidM
-       let pid = E.EVal (Just (E.CPid [them])) l
+       let pid = E.EVal (Just (E.CPid [them])) Nothing l
        withCurrentM pid $ do
          (pSpawn, _) <- fromEffExp s p x
          let pSpawn' = substStmt [them] pid pSpawn
@@ -508,7 +514,7 @@ fromSymSpawn l s xs p x
          addProcessM (ParIter [toUpper them] themSet pSpawn)
          addParamM param themSet
          let l' = setType (Just $ E.TyConApp "Control.Distributed.Process.SymmetricProcess.SymProcessSet" []) l
-         return (Skip, Just (E.EVal (Just (E.CPidSet themSet)) l'))
+         return (Skip, Just (E.EVal (Just (E.CPidSet themSet)) Nothing l'))
 
 newPidM = do who <- gets next
              modify $ \s -> s { next = succ who }
@@ -606,6 +612,10 @@ anf s@(Assgn x t (E.ESymElt {}))
 anf s@(Assgn x t e)
   = do (y, bs) <- imm e
        return $ stitch bs (Assgn x t y)
+anf s@(Assume p)
+  = return s
+anf s@(Assert p)
+  = return s
 anf (Seq ss)
   = seqStmts <$> mapM anf ss
 anf (While l xs s)
@@ -637,7 +647,7 @@ imm (E.ESymElt s l)
        return (x, bs ++ [(E.varId x, e)])
 imm e@E.EVar{}
   = return (e, [])
-imm e@(E.EVal _ _)
+imm e@(E.EVal _ _ _)
   = return (e, [])
 imm e@(E.ECon c [] l)
   = return (e, [])
@@ -678,6 +688,10 @@ instance Pretty (IceTStmt a) where
   ppPrec _ (Recv t w (Just x))
     = pp x <+> text ":=" <+> ppRecv t w
 
+  ppPrec _ (Assert p)
+    = pp "assert" <+> pp p
+  ppPrec _ (Assume p)
+    = pp "assume" <+> pp p
   ppPrec _ (Assgn x _ e)
     = pp x <+> text ":=" <+> pp e
   ppPrec _ (XAssgn p x q e)

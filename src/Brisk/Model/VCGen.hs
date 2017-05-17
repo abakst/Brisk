@@ -43,35 +43,6 @@ freshId x = do c <- gets ctr
                return $ "x!" ++ show c
 
 --------------------------------------------------------------------------------
--- Substitution
--------------------------------------------------------------------------------
-substPred :: T.Subst T.Id (IceTExpr a)
-          =>  [(T.Id, IceTExpr a)]
-          -> VCPred a
-          -> VCPred a
-substPred θ (φ :==>: ψ)    = substPred θ φ :==>: substPred θ ψ
-substPred θ (Conj φs)      = Conj (substPred θ <$> φs)
-substPred θ (Disj φs)      = Disj (substPred θ <$> φs)
-substPred θ (LNot φ)       = LNot $ substPred θ φ
-substPred θ (BRel o e1 e2) = BRel o (T.subst θ e1) (T.subst θ e2)
-substPred θ (PVar p xs)    = PVar p (T.subst θ <$> xs)
-substPred θ (CHC xs p q)   = CHC xs (substPred θ' p) (substPred θ' q)
-  where θ' = [ (x,e) | (x,e) <- θ, x `notElem` xs ]
-substPred θ φ              = φ
-
-fvPred :: T.Subst T.Id (IceTExpr a)
-          => VCPred a
-          -> Set T.Id
-fvPred (φ :==>: ψ) = union (fvPred φ) (fvPred ψ)
-fvPred (Conj φs)   = unions (fvPred <$> φs)
-fvPred (Disj φs)   = unions (fvPred <$> φs)
-fvPred (LNot φ)    = fvPred φ
-fvPred (BRel o e1 e2) = union (T.fv e1) (T.fv e2)
-fvPred (PVar p xs)    = unions (T.fv <$> xs)
-fvPred (CHC xs p q)   = union (fvPred p) (fvPred q) \\ fromList xs
-fvPred Top            = Set.empty
-fvPred Bot            = Set.empty
---------------------------------------------------------------------------------
 -- System IO
 --------------------------------------------------------------------------------
 runVC :: T.Annot s => IceTStmt s -> IO Bool
@@ -133,11 +104,11 @@ wlp :: T.Annot s => VCPred s -> IceTStmt s -> VCM s (VCPred s)
 --------------------------------------------------------------------------------
 wlp φ Skip             = return φ
 wlp φ Fail             = return Bot
-wlp φ (XAssgn p x q e) = return $ substPred [(x,e)] φ
+wlp φ (XAssgn p x q e) = return $ T.substPred [(x,e)] φ
 wlp φ (Case e es d)    = wlpCase φ e es d
 wlp φ (Seq ss)         = foldM wlp φ (reverse ss)
 wlp φ (While l xs s)   = wlpWhile φ l xs s
-wlp φ (Continue l)     = return $ substPred [(l, T.EVal (Just $ T.CInt 1) T.dummyAnnot)] φ
+wlp φ (Continue l)     = return $ T.substPred [(l, T.EVal (Just $ T.CInt 1) Nothing T.dummyAnnot)] φ
 wlp φ (Assert ψ)       = return $ Conj [φ, ψ]
 wlp φ (Assume ψ)       = return $ ψ :==>: φ
 
@@ -181,12 +152,13 @@ instance SMTLIB T.Op where
   smt T.Le = "<="
 
 instance SMTLIB (IceTExpr a) where
-  smt (T.EVar x _)    = x
-  smt (T.EVal (Just (T.CInt n)) _) = show n
-  smt (T.ECon "True" [] _) = "true"
-  smt (T.ECon "False" [] _) = "false"
-  smt (T.ECon c [] _) = c
-  smt (T.ECon c xs _) = printf "(%s %s)" c (smtList xs)
+  smt (T.EVar x _)                         = x
+  smt (T.EVal (Just (T.CInt n)) Nothing _) = show n
+  smt (T.EVal Nothing (Just (v, p)) _)     = smt p
+  smt (T.ECon "True" [] _)                 = "true"
+  smt (T.ECon "False" [] _)                = "false"
+  smt (T.ECon c [] _)                      = c
+  smt (T.ECon c xs _)                      = printf "(%s %s)" c (smtList xs)
 
 instance SMTLIB (VCPred a) where
   smt Top              = "true"
@@ -209,8 +181,8 @@ horn' (p :==>: Conj qs)
   = concat <$> mapM horn' ((p :==>:) <$> qs)
 horn' (p :==>: CHC xs q r)
   = do xs' <- mapM freshId xs
-       let q' = substPred θ q
-           r' = substPred θ r
+       let q' = T.substPred θ q
+           r' = T.substPred θ r
            θ  = [ (x, T.EVar x' T.dummyAnnot) | (x,x') <- zip xs xs' ]
        horn' $ CHC xs' (Conj [p, q']) r'
 horn' (Conj ps)
@@ -218,7 +190,7 @@ horn' (Conj ps)
 horn' (CHC xs p q)
   = return [smt $ CHC (toList xs') p q]
   where
-    xs' = unions [fvPred p, fvPred q, fromList xs]
+    xs' = unions [T.fvPred p, T.fvPred q, fromList xs]
 horn' p
   = horn' (CHC [] Top p)
 
@@ -252,14 +224,14 @@ s1 = Seq [ Case (T.ECon "True" [] ())
            Skip
          ]
 
-s2 = Seq [ XAssgn "p" "x" "q" (T.EVal (Just $ T.CInt 0) ())
-         , XAssgn "p" "y" "q" (T.EVal (Just $ T.CInt 1) ())
-         , While "I" ["x", "y"] (XAssgn "p" "x" "q" (T.EVal (Just $ T.CInt 1) ()))
+s2 = Seq [ XAssgn "p" "x" "q" (T.EVal (Just $ T.CInt 0) Nothing ())
+         , XAssgn "p" "y" "q" (T.EVal (Just $ T.CInt 1) Nothing ())
+         , While "I" ["x", "y"] (XAssgn "p" "x" "q" (T.EVal (Just $ T.CInt 1) Nothing ()))
          ]
 
-s3 = Seq [ Assume (BRel Eq (T.EVar "x" ()) (T.EVal (Just (T.CInt 0)) ()))
-         , While "I" ["x", "y"] (XAssgn "p" "x" "q" (T.EVal (Just (T.CInt 1)) ()))
-         , Assert $ Disj [ BRel Eq (T.EVar "x" ()) (T.EVal (Just (T.CInt 0)) ())
-                         , BRel Eq (T.EVar "x" ()) (T.EVal (Just (T.CInt 1)) ())
+s3 = Seq [ Assume (BRel Eq (T.EVar "x" ()) (T.EVal (Just (T.CInt 0)) Nothing ()))
+         , While "I" ["x", "y"] (XAssgn "p" "x" "q" (T.EVal (Just (T.CInt 1)) Nothing ()))
+         , Assert $ Disj [ BRel Eq (T.EVar "x" ()) (T.EVal (Just (T.CInt 0)) Nothing ())
+                         , BRel Eq (T.EVar "x" ()) (T.EVal (Just (T.CInt 1)) Nothing ())
                          ]
          ]

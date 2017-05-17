@@ -37,7 +37,7 @@ import Text.Show.Pretty hiding (Name)
 import Text.PrettyPrint.HughesPJ
 import Brisk.Model.GhcInterface
 import Brisk.Model.EmbedCore
-import Brisk.Model.Types
+import Brisk.Model.Types hiding (PrimOp(..))
 import Brisk.Annotations
 import Control.Distributed.Process (expect)
 import qualified Language.Haskell.TH as TH

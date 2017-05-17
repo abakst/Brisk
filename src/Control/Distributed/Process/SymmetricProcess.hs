@@ -8,6 +8,8 @@ module Control.Distributed.Process.SymmetricProcess (
   , spawnSymmetric
   , chooseSymmetric, (?!)
   , empty
+  , assume
+  , assert
   ) where
 
 import Control.Monad
@@ -17,6 +19,13 @@ import GHC.Generics (Generic)
 import Control.Distributed.Process
 import Control.Distributed.Process.Serializable
 import Control.Distributed.Process.Closure
+---------------------------------------------------------------------------
+--
+---------------------------------------------------------------------------
+assume, assert :: Bool -> Process ()
+assume b = return ()
+
+assert b = return ()
 
 ---------------------------------------------------------------------------
 -- Self Signed Messages

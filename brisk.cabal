@@ -33,6 +33,7 @@ library
                    , Brisk.Model.Types
                    , Brisk.Model.Extract
                    , Brisk.Model.Builtins
+                   , Brisk.Model.TheoryBuiltins
                    -- , Brisk.Model.Prolog
                    , Brisk.Model.Rewrite
                    , Brisk.Model.RewriteTypes

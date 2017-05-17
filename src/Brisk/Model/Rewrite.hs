@@ -272,15 +272,15 @@ doWhileContExit :: RWAnnot s
 doWhileContExit cs
   = do ([One p sp (While l xs s)], ps) <- ofList $ partitions cs
        let p' = One p sp s
-       ps'                       <- runRewrites (all (finished p l)) (p' : ps)
-       return $ fmap (fixup p l xs s) ps'
+       ps'                             <- runRewrites (all (finished p l)) (p' : ps)
+       return $ dbgPP "doWhileContExit" $ fmap (fixup p l xs s) ps'
   where
     fixup pid l xs s (One p sp (Continue l'))
      | l == l' = One p sp (While l xs s)
     fixup pid _ _ _ c = c
 
-    finished pid l (One p _ (Continue l')) = p /= pid || l == l'
-    finished pid l (One p _ _)              = p /= pid
+    finished pid l (One p _ (Continue l'))  = p /= pid || l == l'
+    finished pid l (One p _ s)              = p /= pid || s == Skip
     finished _ _ _                          = True
 
 doReactiveWhile :: RWAnnot s
@@ -385,13 +385,13 @@ walkStmtInsts sets p0 myP s = go [] s
     go is s@(Send t (T.EVar p l) m)
       | Just myP' <- myP
       , p == myP' = return ( myP' :!-->: specPid p0 : is
-                           , substStmt myP' (T.EVal (Just (T.CPid $ specPid p0)) l) s
+                           , substStmt myP' (T.EVal (Just (T.CPid $ specPid p0)) Nothing l) s
                            ) -- Sending to "the proc"
     go is s@(Recv t Nothing mx)
       = do sender <- symSenders t
            if sender `elem` sets then
              return ( myP :?-->: specPid p0 : is
-                    , Recv t (Just (T.EVal (Just (T.CPid $ specPid p0)) T.dummyAnnot)) mx
+                    , Recv t (Just (T.EVal (Just (T.CPid $ specPid p0)) Nothing T.dummyAnnot)) mx
                     )
            else
              return (is, s)
@@ -474,7 +474,8 @@ doInduction :: RWAnnot s
             => [RewriteContext s]
             -> RWM s [RewriteContext s]
 doInduction ps
-  = do (pre, post) <- ofList (choosePrefixes ps)
+  = do (ps, ps0)                        <- ofList $ partitions ps
+       (pre, post)                      <- ofList $ choosePrefixes ps
        let ps'                          = collectAndMerge pre
        (toSkipPre, [], toSame) <- ofList $ chooseInduction $ ps'
        consts0                         <- gets consts
@@ -505,7 +506,7 @@ doInduction ps
                         }
        
        -- return $ ({- toSkipPost ++ -} toSame)
-       return $ dbgPP "OUT" ({- toSkipPost ++ -} toSame `stitchContexts` post)
+       return $ dbgPP "OUT" (ps0 ++ {- toSkipPost ++ -} toSame `stitchContexts` post)
   where
     iterateTrace (Par xs bag _) t
       = ForEach ("(" ++ intercalate "," xs ++ ")")
@@ -618,6 +619,7 @@ chooseCaseSplit ps
                return  (Par ps bag (One p sp s)
                        ,One (Unfolded x0 xs) sp (substStmt x (pidLit x0) s)
                        ,ps')
+             _ -> mzero
          Sum ps bag (One p sp s) ->
            case p of
              Unfolded x xs -> do
@@ -736,14 +738,16 @@ runRewritesGroup done ps
  = return ps
 runRewritesGroup done ps
   = do doRewrite                   <- ofList rules
+       b <- gets buffers
        ps'                  <- {- dbgPP ("Rewrote:\n"++render(pp(someStmts))++"\n"++render(pp(otherStmts))++"\n") <$> -}
                                         (doRewrite ({- dbgPP "trying:" -} ps))
+       b' <- gets buffers
 
        -- Marked is set up so that the list of processes is still aligned.
        -- This works if the processes we expected to "go away" actually do,
        -- hence the following check:
        -- cond $ concatMap filterSkips someStmts' == concatMap filterSkips toNotSkip
-       cond $ ps' /= ps
+       cond $ ps' /= ps || not (buffersUnchanged b b')
        runRewrites done $ concatMap filterSkips ps'
 
 stitchContexts cs cs'
@@ -941,7 +945,7 @@ bind (p,x) e
 eval :: RWAnnot s => ProcessIdSpec -> IceTExpr s -> RWM s (IceTExpr s)
 eval p e@(T.EUnion es)
   = T.EUnion <$> mapM (eval p) es
-eval _ e@(T.EVal _ _)
+eval _ e@(T.EVal _ _ _)
   = return e
 eval p e@(T.EVar x _)
   = fromMaybe e . flip Env.lookup (p,x) <$> gets consts     
@@ -963,20 +967,20 @@ eval p (T.ECon c es l)
   = do es' <- mapM (eval p) es
        return $ T.ECon c es' l
 eval p _
-  = return $ T.EVal Nothing T.dummyAnnot
+  = return $ T.EVal Nothing Nothing T.dummyAnnot
 
 getPidMaybe :: RWAnnot s => ProcessIdSpec -> IceTExpr s -> RWM s ProcessId
 getPidMaybe pid m
   = do m' <- eval pid m
        case m' of
-         T.EVal (Just (T.CPid p)) _  -> return p
+         T.EVal (Just (T.CPid p)) _ _  -> return p
          _                           -> mzero
 
 getPidSetMaybe :: RWAnnot s => ProcessIdSpec -> IceTExpr s -> RWM s (Maybe ProcessId)
 getPidSetMaybe pid m
   = do m' <- eval pid m
        return $ case m' of
-                  T.EVal (Just (T.CPidSet p)) _ -> Just p
+                  T.EVal (Just (T.CPidSet p)) _ _ -> Just p
                   _                             -> Nothing
 -- type PairRule s = IceTProcess s
 --                -> IceTProcess s      
@@ -1460,5 +1464,5 @@ msgSends s = sends
     recv1 snds t = snds
     sends        = queryMsgTys send1 recv1 [] s
 
-pidLit p = T.EVal (Just (T.CPid p)) T.dummyAnnot
+pidLit p = T.EVal (Just (T.CPid p)) Nothing T.dummyAnnot
  
