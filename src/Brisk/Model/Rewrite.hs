@@ -21,12 +21,12 @@ import Brisk.Model.Env as Env
 import Brisk.Pretty
 import Brisk.UX
 import Text.Show.Pretty (ppShow)
-import Text.PrettyPrint.HughesPJ as PP (($$), (<+>), (<>), vcat, hcat, parens) 
+import Text.PrettyPrint.HughesPJ as PP (($$), (<+>), (<>), vcat, hcat, parens)
 import qualified Debug.Trace as Dbg
 
---------------------------------------------------------------------------------       
+--------------------------------------------------------------------------------
 -- Context Manipulation
---------------------------------------------------------------------------------       
+--------------------------------------------------------------------------------
 splitContext :: RWAnnot s => RewriteContext s -> [(RewriteContext s, RewriteContext s)]
 splitContext (One p True (Seq s))
   = [ (One p True (seqStmts (take i s)), One p True (seqStmts (drop i s)))
@@ -68,7 +68,7 @@ splitContext c
 dbg :: Show a => String -> a -> a
 dbg m x = Dbg.trace (m ++ ": " ++ ppShow x) x
 
-dbgPP :: Pretty a => String -> a -> a  
+dbgPP :: Pretty a => String -> a -> a
 dbgPP m x = Dbg.trace (m ++ ": " ++ render (pp x) ++ "\n") x
 
 -- collectStmts :: ProcessIdSpec -> IceTStmt s -> RewriteContext s
@@ -102,8 +102,8 @@ runAssign (One p split (Assgn x t rhs@(T.ECase t' e alts Nothing l)))
   --             Assgn x t e) | (c,xs,e) <- alts ]
 runAssign (One p sp (Assgn x _ e))
   = do eVal <- eval p e
-       modify $ \st -> st { consts = Env.addsEnv (consts st) [((p,x), eVal)] }
-       seqTrace (XAssgn (specPid p) x (specPid p) eVal)
+       modify $ \st -> st { consts = Env.addsEnv (consts st) [dbgPP "newAdd" ((p,x), eVal)] }
+       seqTrace (XAssgn (specPid p) x (specPid p) e)
        return (One p sp Skip)
 runAssign _
   = mzero
@@ -120,7 +120,7 @@ runSimplifyCase (One p sp (Case e alts md))
     --        return (One p s : ps)
 runSimplifyCase (Par x xs c@(One p@(Unfolded u us) sp s))
   = do env0    <- gets consts
-       let env1 = instantiateConsts env0 p 
+       let env1 = instantiateConsts env0 p
        modify $ \st -> st { consts = env1 }
        c'      <- runSimplifyCase (One p sp s)
        env1    <- gets consts
@@ -129,7 +129,7 @@ runSimplifyCase (Par x xs c@(One p@(Unfolded u us) sp s))
        return $ Par x xs c'
       -- Par x xs $ runSimplifyCase c
 
-       -- eVal                           <- eval p e 
+       -- eVal                           <- eval p e
        -- ifte (ofList alts >>= unifies p eVal)
 runSimplifyCase _
   = mzero
@@ -149,17 +149,30 @@ pullUpMatch _
 
 isContinue (Continue _) = True
 isContinue _            = False
-  
+
+runAssert :: RWAnnot s
+          => RewriteContext s
+          -> RWM s (RewriteContext s)
+runAssert (One p sp (Assert q))
+  = do seqTrace (Assert q)
+       return (One p sp Skip)
+runAssert (One p sp (Assume q))
+  = do seqTrace (Assume q)
+       return (One p sp Skip)
+runAssert _
+  = mzero
+
 runSend :: RWAnnot s
         => RewriteContext s
         -> RWM s (RewriteContext s)
 runSend (One p sp (Send t q m))
   = do c    <- gets consts
        qPid <- getPidMaybe p q
+
        mv   <- eval p m
        enqueue t pPid qPid mv
-       
-       return (dbgPP "runSend" $ One p sp Skip)
+
+       return $ One p sp Skip
          where
            pPid = specPid p
 runSend _
@@ -169,7 +182,7 @@ runRecvFrom :: RWAnnot s
             => RewriteContext s
             -> RWM s (RewriteContext s)
 runRecvFrom (One q sp (Recv t (Just p) mx))
-  = do pPid <- dbgPP "pPid" <$> getPidMaybe q p
+  = do pPid <- getPidMaybe q p
        buf  <- gets buffers
        msg  <- dequeue t pPid qPid
 
@@ -189,7 +202,7 @@ runRecvFrom _
 
 runCollect :: RWAnnot s
            => RewriteContext s
-           -> RWM s (RewriteContext s)         
+           -> RWM s (RewriteContext s)
 runCollect c
   = do Just c' <- collectContext c
        return c'
@@ -207,7 +220,7 @@ doCaseStmt :: RWAnnot s
 doCaseStmt cs
   = do ([c], ps)                          <- ofList $ partitions cs
        (One p sp (Case e alts md), rest)  <- splitCase c
-       eVal                               <- eval p e 
+       eVal                               <- eval p e
        ifte (ofList alts >>= unifies p eVal)
             (runMatch p sp rest ps) $ do
               (ps', ps'') <- ofList $ partitions ps
@@ -240,7 +253,7 @@ doCaseStmt cs
                                   , Case e ts Nothing
                                   ]
                               , consts = joinEnvs env
-                              } 
+                              }
            return []
 
     rewriteAlt b f e0 (es, ts) (c, s)
@@ -254,7 +267,7 @@ doCaseStmt cs
            t' <- gets trace
            e  <- dbg "rewrote!" () `seq` gets consts
            return ((e:es, (c,t') : ts))
-    
+
 unifies p e1@(T.ECon c xs l) (e2@(T.ECon c' xs' l'), s)
   | c == c' && length xs == length xs'
   = return $ (patternEnv p xs xs', s)
@@ -331,7 +344,7 @@ symSenders t
 --------------------------------------------------------------------------------
 -- Computing Instantiations for induction
 --------------------------------------------------------------------------------
-data Instance = Maybe Id :?-->: Id | Id :!-->: Id
+data Instance = Maybe Id :?-->: Id | Maybe Id :!-->: Id
                 deriving (Eq, Show)
 
 
@@ -353,9 +366,9 @@ data Instance = Maybe Id :?-->: Id | Id :!-->: Id
 
 -- bubbleUpInstStmt sets (Seq ss)
 --   = do (ss', inst) <- foldM go ([], []) $ reverse ss
---        return $ (Seq ss', inst) 
+--        return $ (Seq ss', inst)
 --   where
---     go (stmts, inst) s = do (s', i) <- bubbleUpInstStmt sets s 
+--     go (stmts, inst) s = do (s', i) <- bubbleUpInstStmt sets s
 --                             return $ (s' : stmts, i ++ inst)
 
 -- bubbleUpInstStmt sets s
@@ -368,7 +381,7 @@ findProcess :: [Id]
 findProcess xs ps
   = case procs of
       [(x,(p,sp),s)] -> Just ((p, sp), s, notprocs)
-      _         -> Nothing
+      _              -> Nothing
   where
     procs    = [ (x, (p, sp), s) | (x, One p sp s) <- zip xs ps, specPid p == x ]
     notprocs = [ (x, (p, sp), s) | (x, One p sp s) <- zip xs ps, specPid p /= x ]
@@ -377,16 +390,26 @@ walkStmtInsts :: RWAnnot s
               => [Id]
               -> ProcessIdSpec
               -> Maybe Id
-              -> IceTStmt s
+              -> (ProcessIdSpec, IceTStmt s)
               -> RWM s ([Instance], IceTStmt s)
-walkStmtInsts sets p0 myP s = go [] s
+walkStmtInsts sets p0 myP (me, s) = go [] s
   where
     go :: RWAnnot s => [Instance] -> IceTStmt s -> RWM s ([Instance], IceTStmt s)
     go is s@(Send t (T.EVar p l) m)
       | Just myP' <- myP
-      , p == myP' = return ( myP' :!-->: specPid p0 : is
+      , p == myP' = return ( Just myP' :!-->: specPid p0 : is
                            , substStmt myP' (T.EVal (Just (T.CPid $ specPid p0)) Nothing l) s
                            ) -- Sending to "the proc"
+    go is s@(Send t x@(T.EVar xid _) m)
+      = do c0 <- gets consts
+           let try = do (T.ESymElt (T.EVal (Just (T.CPidSet xs)) _  _) l) <- eval me x
+                        if xs `elem` sets then
+                          return ( Just xid :!-->: specPid p0 : is
+                                 , Send t (T.EVal (Just (T.CPid $ specPid p0)) Nothing l) m
+                                 )
+                        else
+                         return (is, s)
+           try `mplus` return (is, s)
     go is s@(Recv t Nothing mx)
       = do sender <- symSenders t
            if sender `elem` sets then
@@ -410,26 +433,26 @@ freshInst :: RWAnnot s
 freshInst p@(Par xs@(x:xs0) (Zipped n s) (FinPar ps))
   | length xs == n && length ps == n
   , Just ((p0,p0sp), s0, rest) <- findProcess xs ps
-  = do p1    <- fresh p0
+  = do p1    <- fresh $ dbgPP "p0" p0
        let p1pid = specPid p1
            p1Lit = pidLit p1pid
        rest' <- forM rest $ \(x,(p,sp),s) ->
                   do -- This is not QUITE right, need to freshen x
                      -- in case it appears in some other expression,
                      -- but let's do that later...
-                     (is, s') <- walkStmtInsts sets p1 (Just x) s
-                     if toUnify is 
+                     (is, s') <- walkStmtInsts sets p1 (Just x) (p, s)
+                     if toUnify is
                        then return (One p sp $ substStmt x p1Lit s')
-                       else mzero
+                       else return (One p sp s)
        return $ (Just p1, One p1 p0sp (substStmt (specPid p0) p1Lit s0) : rest')
 
   | length xs == n && length ps == n
   = do xs' <- mapM fresh xs
        cs <- forM (zip (zip xs xs') ps) $ \((x,x'), One p sp s) -> do
-             (_, s') <- walkStmtInsts sets p Nothing s
+             (_, s') <- walkStmtInsts sets p Nothing (p, s)
              return (One p sp $ substStmt x (T.EVar x' T.dummyAnnot) s')
        return (Nothing, cs)
-      
+
   | otherwise
   = mzero
   where
@@ -470,14 +493,33 @@ partitionStmtUntilLoop (Seq ss)
 partitionStmtUntilLoop s
   = (s, Skip)
 
+collectSomeForeverLoops :: RWAnnot s => [RewriteContext s] -> RWM s [RewriteContext s]
+collectSomeForeverLoops cs
+  = do sets <- gets pidSets
+       mapM (go (dbgPP "sets" sets)) cs
+  where
+    go sets c@(One p sp (While l xs s))
+     | whileReactive l s
+     = ofList ([ Sequence True [Par ["_"] (Singleton set) (One p sp (dropCont l s)), c]| set <- sets ] ++ [ c ])
+    go sets c
+     = return c
+
+    dropCont l (Seq ss) = seqStmts (take (length ss - 1) ss ++ [dropCont l (last ss)])
+    dropCont l (Case e alts d) = Case e (fmap (dropCont l <$>) alts) (dropCont l <$> d)
+    dropCont l (Continue l') | l == l' = Skip
+    dropCont _ s = s
+
+
 doInduction :: RWAnnot s
             => [RewriteContext s]
             -> RWM s [RewriteContext s]
 doInduction ps
-  = do (ps, ps0)                        <- ofList $ partitions ps
-       (pre, post)                      <- ofList $ choosePrefixes ps
+  = do gets induct >>= cond . not
+       (ps0, ps00)                     <- ofList $ partitions ps
+       ps1                             <- collectSomeForeverLoops ps0
+       (pre, post)                     <- ofList $ choosePrefixes ps1
        let ps'                          = collectAndMerge pre
-       (toSkipPre, [], toSame) <- ofList $ chooseInduction $ ps'
+       (toSkipPre, [], toSame)         <- ofList $ chooseInduction $ ps'
        consts0                         <- gets consts
 
        -- let consts1 = instantiateConsts consts0
@@ -486,12 +528,13 @@ doInduction ps
 
        -- Instantiate quantified constants of instantiated process
        -- (Assuming one for now)
-       let consts1       = dbgPP "consts" $ maybe consts0 (instantiateConsts consts0) p0
+       let consts1       = maybe consts0 (instantiateConsts consts0) p0
 
        b0 <- gets buffers
        t0 <- gets trace
-       modify $ \s -> s { consts = consts1 ,
-                          trace  = Skip
+       modify $ \s -> s { consts = consts1
+                        , trace  = Skip
+                        , induct = True
                         }
        dbgPP "doInduction" (toSkipPre' , toSame) `seq`
          runRewrites ((== toSame)) (toSkipPre' ++ toSame)
@@ -503,10 +546,11 @@ doInduction ps
        let consts3       = maybe consts2 (generalizeConsts consts2) p0
        modify $ \s -> s { consts = consts3
                         , trace  = seqStmts [t0, iterateTrace toSkipPre t1]
+                        , induct = False
                         }
-       
+
        -- return $ ({- toSkipPost ++ -} toSame)
-       return $ dbgPP "OUT" (ps0 ++ {- toSkipPost ++ -} toSame `stitchContexts` post)
+       return $ dbgPP "OUT" (ps00 ++ {- toSkipPost ++ -} toSame `stitchContexts` post)
   where
     iterateTrace (Par xs bag _) t
       = ForEach ("(" ++ intercalate "," xs ++ ")")
@@ -534,7 +578,7 @@ doInstantiateSum ps
          return (p0pid, rest')
        seqTrace (Assgn x Nothing (T.ESymElt (T.EVar xs T.dummyAnnot) T.dummyAnnot))
        return (p0 : rest')
-       
+
 
 doCaseSplit :: RWAnnot s
             => [RewriteContext s]
@@ -547,28 +591,29 @@ doCaseSplit ps
          rest' <- freshInstOther p0pid rest
          return (p0pid, rest')
        seqTrace (Assgn x Nothing (T.ESymElt (T.EVar xs T.dummyAnnot) T.dummyAnnot))
-       runRewrites ((== 1) . length) $ dbgPP "case split" (p0 : rest')
+       runRewrites ((== 1) . length) (p0 : rest')
        return [p]
        -- consts0     <- gets consts
        -- let consts1  = maybe consts0 (instantiateConsts consts0) $ contextPid p
        -- undefined
 
-freshInstOther spec@(Unfolded p ps) qs       
+freshInstOther spec@(Unfolded p ps) qs
   = do (is, qs') <- foldM go ([], []) qs -- go (walkStmtsInst [ps] p Nothing <$> qs)
        if toInst is then return qs' else mzero
   where
     toInst []           = True
-    toInst is           = allRecvs is && distinct [p | p :?-->: _ <- is] 
-
-    distinct [] = True
-    distinct (x:xs) = x `notElem` xs && distinct xs
-    
-    allRecvs = all isRecv
-    isRecv (_ :?-->: _) = True
-    isRecv _            = False
+    toInst is           = distinct $ [p | p :?-->: _ <- is] ++
+                                     [p | p :!-->: _ <- is]
+                       {- && allRecvs is -}
+    distinct []         = True
+    distinct (x:xs)     = x `notElem` xs && distinct xs
+    -- Why did I have this?
+    -- allRecvs            = all isRecv
+    -- isRecv (_ :?-->: _) = True
+    -- isRecv _            = False
 
     go (is, qs) (One q sp s)
-      = do (i, s') <- walkStmtInsts [ps] spec (Just (specPid q)) s
+      = do (i, s') <- walkStmtInsts [ps] spec (Just (specPid q)) (q, s)
            return (i ++ is, One q sp s':qs)
     go _ _
       = mzero
@@ -577,8 +622,8 @@ freshInstOther _ _
     -- go (One p s)
     --   = do (i, s') <- walkStmtInsts [ps] p Nothing s
     --        undefined
-  
-  
+
+
 generalizeConsts :: RWAnnot s => Store s -> ProcessIdSpec -> Store s
 generalizeConsts c p@(Unfolded p0 ps)
   = Env.fromList newBinds `Env.unionEnvs` Env.fromList filterBinds
@@ -609,7 +654,7 @@ chooseCaseSplit :: RWAnnot s
 chooseCaseSplit ps
   -- = do (p, s, rest) <- ofList [ (Par ps bag s, s, ps') | ([Par ps bag s], ps') <- partitions ps ]
   --      case s of
-  --        (Unfolded 
+  --        (Unfolded
   = do ([c]{-[Par ps bag (One p sp s)]-}, ps') <- ofList $ partitions ps
        case c of
          Par ps bag (One p sp s) ->
@@ -655,23 +700,24 @@ alwaysRules :: RWAnnot s => [RewriteContext s -> RWM s (RewriteContext s)]
 alwaysRules = [ pullUpMatch
               , applyToOneRule runAssign
               , applyToOneRule runSend
+              , applyToOneRule runAssert
               , applyToOneRule runRecvFrom
               , applyToOneRule runSimplifyCase
               , runCollect
               ]
 rules :: RWAnnot s => [[RewriteContext s] -> RWM s [RewriteContext s]]
-rules = [ doCaseStmt
-        , doReactiveWhile
-        , doWhileContExit
-        , doCaseSplit 
+rules = [ doReactiveWhile
+        , doCaseStmt
+        , doCaseSplit
         , doInstantiateSum
-        , doInduction 
+        , doInduction
+        , doWhileContExit
         ]
 
 cond b | b         = return ()
        | otherwise = mzero
 
-         
+
 applyToOneRule :: RWAnnot s
            => (RewriteContext s -> RWM s (RewriteContext s))
            -> RewriteContext s
@@ -756,7 +802,7 @@ stitchContexts cs cs'
   where
     go (out,cs) c = let (c', cs') = stitchOne c [] cs in
                     (c':out, cs')
-              
+
 
 stitchOne c oldCs []
   = (c, oldCs)
@@ -793,9 +839,9 @@ collectContext :: RWAnnot s
 collectContext (Par x xs c)
   = do Just (Ast c') <- collectContext c
        return . Just $ Ast (Sum x xs c')
-collectContext (One p sp (While l _ s))
-  | whileReactive l s
-  = return . Just $ Ast (One p sp s)
+-- collectContext (One p sp (While l _ s))
+--   | whileReactive l s
+--   = return . Just $ Ast (One p sp s)
 collectContext (One p sp (ForEach x (_, T.EVar xs _) s))
   = return . Just $ Par [x] (Singleton xs) (One p False s)
 collectContext (One p sp (ForEach x (_, e) s))
@@ -818,7 +864,7 @@ collectSome (c:cs')
          Nothing -> return (c:csColl)
          Just c' -> ofList [c':csColl, c:csColl]
 
-allDone ps = null ps       
+allDone ps = null ps
 
 filterSkips :: RWAnnot s => RewriteContext s -> [RewriteContext s]
 filterSkips c = go c
@@ -894,21 +940,29 @@ fromIceT ps
   = case rfRes of
       Nothing       -> abort "Not Race Free!" ps
       Just (m1, m2) ->
-        trace . snd $ findRewrite (runRewrites null cs) initState { concrSends = m1
-                                                                  , symSends   = m2
-                                                                  , pidSets    = psets
-                                                                  }
+        trace . snd $ findRewrite (runRewrites allDone cs) initState { concrSends = m1
+                                                                     , symSends   = m2
+                                                                     , pidSets    = psets
+                                                                     }
   where
+    allDone ps'
+      | ps' /= cs = all nonTermLoop ps'
+      | otherwise = False
+    nonTermLoop (One p _ (While l _ s)) = whileReactive l s
+    nonTermLoop (Par _ _ c)             = nonTermLoop c
+    nonTermLoop (Ast _)                 = True
+    nonTermLoop _                       = False
+
     cs    = dbgPP "cs!" (toContext <$> ps)
     psets = [ pset | ParIter _ pset _ <- ps ]
-    rfRes = tySenders ps
+    rfRes = tySenders $ dbgPP "ps" ps
 
 toContext :: RWAnnot a => IceTProcess a -> RewriteContext a
 toContext (Single p s)     = One (Concrete p) True s
 toContext (ParIter p ps s) = Par [p] (Singleton ps) $ One (Unfolded p ps) True s
 -- runRWM :: RWM s (RWResult a (RWTrace s)) -> RWState s -> RWResult (RWTrace s) [RWTrace s]
 -- runRWM rwm s0
---   = fromMaybe failures success 
+--   = fromMaybe failures success
 --   where
 --     rewrites = runStateT rwm s0
 --     success  = (Result . trace) <$> listToMaybe [ s | (Result _, s) <- rewrites ]
@@ -947,13 +1001,19 @@ eval p e@(T.EUnion es)
   = T.EUnion <$> mapM (eval p) es
 eval _ e@(T.EVal _ _ _)
   = return e
+eval p (T.ESymElt set l)
+  = do set' <- eval p set
+       return (T.ESymElt set' l)
 eval p e@(T.EVar x _)
-  = fromMaybe e . flip Env.lookup (p,x) <$> gets consts     
+  = do c <- gets consts
+       case Env.lookup c (p,x) of
+         Just v -> return v
+         _      -> return e
 eval p e@(T.ECase _ x alts _ l)
   = do eVal <- eval p x
        ifte (ofList alts >>= unifyExpr eVal)
             (return)
-            (return e) 
+            (return e)
          where
            unifyExpr :: RWAnnot s => IceTExpr s
                      -> (Id, [Id], IceTExpr s)
@@ -966,6 +1026,11 @@ eval p e@(T.ECase _ x alts _ l)
 eval p (T.ECon c es l)
   = do es' <- mapM (eval p) es
        return $ T.ECon c es' l
+eval p e@(T.EApp _ _ l)
+  = do as' <- mapM (eval p) as
+       return $ foldl' (\a x -> T.EApp a x l) f as'
+  where
+    (f, as) = T.collectAppArgs e
 eval p _
   = return $ T.EVal Nothing Nothing T.dummyAnnot
 
@@ -983,7 +1048,7 @@ getPidSetMaybe pid m
                   T.EVal (Just (T.CPidSet p)) _ _ -> Just p
                   _                             -> Nothing
 -- type PairRule s = IceTProcess s
---                -> IceTProcess s      
+--                -> IceTProcess s
 --                -> RWM s (RWResult (IceTProcess s, IceTProcess s) (RWTrace s))
 -- data RWResult a b = Result a
 --                   | Stuck b
@@ -994,10 +1059,10 @@ getPidSetMaybe pid m
 -- split1 :: IceTProcess s -> Maybe (ProcessId, IceTStmt s, IceTStmt s)
 -- split1 (Single p s) = Just (p,s1,s2)
 --   where
---     (s1,s2) = split1stmt s 
+--     (s1,s2) = split1stmt s
 -- split1 (Unfold p _ _ s _) = Just (p,s1,s2)
 --   where
---     (s1,s2) = split1stmt s 
+--     (s1,s2) = split1stmt s
 -- split1 _                 = Nothing
 
 -- split1stmt (Seq (s:s')) = (s, seqStmts s')
@@ -1010,7 +1075,7 @@ seqTrace :: RWAnnot s => RWTrace s -> RWM s ()
 seqTrace t
   = modify $ \s -> s { trace = seqStmts [trace s, t] }
 
--- procPid :: IceTProcess s -> Maybe ProcessId                   
+-- procPid :: IceTProcess s -> Maybe ProcessId
 -- procPid (Single p _)     = Just p
 -- procPid (Unfold p _ _ _ _) = Just p
 -- procPid _                = Nothing
@@ -1070,7 +1135,7 @@ buffersUnchanged b b'
 --              -> [IceTExpr s]
 --              -> [(IceTExpr s, IceTStmt s)]
 --              -> Maybe (IceTStmt s)
---              -> IceTStmt s 
+--              -> IceTStmt s
 -- matchingCase c xs cs md = go cs
 --   where
 --     go []
@@ -1110,7 +1175,7 @@ buffersUnchanged b b'
 
 -- eraseConsts :: ProcessId -> RWM s [(Id, IceTExpr s)]
 -- eraseConsts p
---   = do cs <- gets consts  
+--   = do cs <- gets consts
 --        let cenv = Env.updateAll del cs
 --        modify $ \s -> s { consts = cenv }
 --        return [ (x',c) | ((p',x'),c) <- Env.toList cs, p == p' ]
@@ -1214,9 +1279,9 @@ buffersUnchanged b b'
 --   | Just (p, Send ty e_q e_m, s') <- split1 a
 --   = do q'  <- getPidMaybe p e_q
 --        qs' <- L.lookup q' <$> gets mems
---        flip (maybe mzero) qs' $ \qs' -> 
+--        flip (maybe mzero) qs' $ \qs' ->
 --          case qs' of
---            T.EVal (Just (T.CPidSet qs')) _ 
+--            T.EVal (Just (T.CPidSet qs')) _
 --              | qs' == qs -> do
 --                let qpid = T.EVal (Just (T.CPid q')) T.dummyAnnot
 --                bind (q',q) qpid
@@ -1239,7 +1304,7 @@ buffersUnchanged b b'
 --            pidvar x | x == q    = q0
 --                     | otherwise = x
 --        modify $ \s -> s { consts = Env.addsEnv c cxs }
-       
+
 -- rewriteUnfoldRecv :: RWAnnot s => PairRule s
 -- rewriteUnfoldRecv a (ParIter q qs t)
 --   | Just (p, Recv ty Nothing mx, s') <- split1 a
@@ -1271,7 +1336,7 @@ buffersUnchanged b b'
 --   = mzero
 
 -- rewriteSend :: RWAnnot s => PairRule s
--- rewriteSend a b 
+-- rewriteSend a b
 --   | Just (p, Send ty e_q e_m, s') <- split1 a
 --   , Just q                        <- procPid b
 --   = do c <- gets consts
@@ -1282,7 +1347,7 @@ buffersUnchanged b b'
 --          enqueue ty p q m
 --          return $ Result (setStmt s' a, b)
 --        else
---          mzero 
+--          mzero
 -- rewriteSend _ _
 --   = mzero
 
@@ -1340,10 +1405,10 @@ buffersUnchanged b b'
 -- force True  = return ()
 -- force False = mzero
 
--- forceM :: RWM s Bool -> RWM s ()  
+-- forceM :: RWM s Bool -> RWM s ()
 -- forceM act = act >>= force
 
--- notExternal :: ProcessId -> RWM s Bool  
+-- notExternal :: ProcessId -> RWM s Bool
 -- notExternal p = not . elem p <$> gets external
 
 -- {-
@@ -1355,7 +1420,7 @@ buffersUnchanged b b'
 --   | p0 == p0' && ps == ps' = Unfold p0 p ps (seqStmts [s0, s0']) s
 -- paste (Unfold p0 p ps s0 s) (ParIter p' ps' t)
 --   | ps == ps' = Unfold p0 p ps s0 (seqStmts [s,t])
--- paste (ParIter p' ps' t) (Unfold p0 p ps s0 s) 
+-- paste (ParIter p' ps' t) (Unfold p0 p ps s0 s)
 --   | ps == ps' = Unfold p0 p ps s0 (seqStmts [t,s])
 -- paste x y
 --   = error ("paste:\n" ++ ppShow x ++ "\n" ++ ppShow y)
@@ -1398,8 +1463,8 @@ buffersUnchanged b b'
 --                 Stuck t        -> return (Stuck t)
 --                 Result (p',q') -> do
 --                  force (p /= p' || q /= q')
---                  go $ Env.addsEnv m [(i,p'),(j,q')] 
-  
+--                  go $ Env.addsEnv m [(i,p'),(j,q')]
+
 -- allrules :: RWAnnot s => [PairRule s]
 -- allrules = rules ++ map flipRule rules
 
@@ -1465,4 +1530,3 @@ msgSends s = sends
     sends        = queryMsgTys send1 recv1 [] s
 
 pidLit p = T.EVal (Just (T.CPid p)) Nothing T.dummyAnnot
- 

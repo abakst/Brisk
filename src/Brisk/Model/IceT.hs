@@ -36,8 +36,9 @@ data IceTStmt_ b a = Send IceTType (E.EffExpr b a) (E.EffExpr b a)
                    | Exec (E.EffExpr b a)
                    -- Only occurs in rw traces, XAssgn p x p e ==> (x_p := eval(p,e))
                    | XAssgn b b b (E.EffExpr b a)
-                   | Assert (E.Pred b a)
-                   | Assume (E.Pred b a)
+                   | XForEach E.Id [E.Id] (Bool, E.EffExpr b a) (IceTStmt_ b a)
+                   | Assert (E.EffExpr b a)
+                   | Assume (E.EffExpr b a)
                   deriving (Show, Eq)
 type IceTStmt = IceTStmt_ E.Id
 
@@ -175,7 +176,7 @@ simplifySkips (Seq ss) = Seq ss'
 runIceT :: (Show a, HasType a, E.Annot a) => IceTExpr a -> (IceTState a, [IceTProcess a])
 runIceT e = (st, procs)
   where
-    procs           =  anormalizeProc
+    procs           =  anormalizeProc False
                     .  mapProcStmt (substStmt "a" aPid)
                   <$> (Single "a" stmt : par st)
     aPid            = E.EVal (Just (E.CPid "a")) Nothing E.dummyAnnot
@@ -200,11 +201,12 @@ floatLets e = ([], e)
 -- ==> ([(x,e1)], e2)
 
 ---------------------------------------------------
-anormalizeProc :: (Show a, HasType a)
-               => IceTProcess a
+anormalizeProc :: (Show a, HasType a, E.Annot a)
+               => Bool -- ANF assert/assume?
+               -> IceTProcess a
                -> IceTProcess a
 ---------------------------------------------------
-anormalizeProc = mapProcStmt anormalize
+anormalizeProc doPred = mapProcStmt (anormalize doPred)
 
 ---------------------------------------------------
 fromTopEffExp :: (Show a, HasType a, E.Annot a)
@@ -333,11 +335,11 @@ fromEffExp s a@(E.EAny x _) _
 fromEffExp s e@(E.EPrimOp E.Fail _ _) _
   = return (Fail, Nothing)
 
-fromEffExp s e@(E.EPrimOp E.Assert [E.EVal Nothing (Just (v, p)) _] _) _
-  = return (Assert p, Nothing)
+fromEffExp s (E.EPrimOp E.Assert [e] _) _
+  = return (Assert e, Nothing)
 
-fromEffExp s e@(E.EPrimOp E.Assume [E.EVal Nothing (Just (v, p)) _] _) _
-  = return (Assume p, Nothing)
+fromEffExp s (E.EPrimOp E.Assume [e] _) _
+  = return (Assume e, Nothing)
 
 fromEffExp s e@E.ECon {} _
   = return (Skip, Just e)
@@ -554,8 +556,9 @@ fromBind :: (Show a, HasType a, E.Annot a)
 fromBind s l1 l2 e1 x e2 y
   = do (p1, mv1) <- fromEffExp s e1 (Just x)
        let s' = maybe (extendStore s x (E.EVar x l1)) (extendStore s x) mv1
+           a  = maybe [] (\v -> [mkAssigns [(x, v)]]) mv1
        (p2, v2) <- fromEffExp s' e2 y
-       return (seqStmts [p1, p2], v2)
+       return (seqStmts (p1 : a ++ [p2]), v2)
 
 ---------------------------------------------------
 fromProcess :: (Show a, HasType a, E.Annot a)
@@ -584,16 +587,32 @@ simplifyCase st@(Case (E.ECon c xs _) alts _)
     app s _              = Nothing
 simplifyCase s = s
 
----------------------------------------------------
-anormalize :: (Show a, HasType a) => IceTStmt a -> IceTStmt a
----------------------------------------------------
-anormalize s = evalState (anf s) 0
 
-type ANFM a = State Int a
+---------------------------------------------------
+-- Helpers for loops etc 
+---------------------------------------------------
+assignVars :: IceTStmt a -> [E.Id]
+assignVars = go [] 
+  where
+    go a (Assgn x _ _)    = x:a
+    go a (Recv _ _ mx)    = maybe a (:a) mx
+    go a (XAssgn _ x _ _) = x:a
+    go a (Seq ss)         = foldl' go a ss
+    go a (ForEach _ _ s)  = go a s
+    go a (While _ _ s)    = go a s
+    go a (Case _ as s)    = foldl' go a (maybeToList s ++ (snd <$> as))
+    go a _                = a
+
+---------------------------------------------------
+anormalize :: (E.Annot a, Show a, HasType a) => Bool ->IceTStmt a -> IceTStmt a
+---------------------------------------------------
+anormalize doPred s = evalState (anf s) (0, doPred)
+
+type ANFM a = State (Int, Bool) a
 -- This anormalization just makes sure that sends have
 -- immediate arguments, that's all
 ---------------------------------------------------
-anf :: (Show a, HasType a) => IceTStmt a -> ANFM (IceTStmt a)
+anf :: (E.Annot a, Show a, HasType a) => IceTStmt a -> ANFM (IceTStmt a)
 ---------------------------------------------------
 anf Skip
   = return Skip
@@ -612,10 +631,21 @@ anf s@(Assgn x t (E.ESymElt {}))
 anf s@(Assgn x t e)
   = do (y, bs) <- imm e
        return $ stitch bs (Assgn x t y)
-anf s@(Assume p)
-  = return s
-anf s@(Assert p)
-  = return s
+anf s@(XAssgn p x q e)
+  = do (y, bs) <- imm e
+       return $ stitch bs (XAssgn p x q y)
+anf s@(Assume e)
+  = do (e', bs) <- imm e
+       return (stitch bs (Assume e'))
+anf s@(Assert e)
+  = do b <- gets snd
+       if b then do
+         (e', bs) <- imm e
+         x <- fresh E.dummyAnnot
+         let bs' = bs ++ [(E.varId x, e')]
+         return (stitch bs' (Assert x))
+       else
+         return s
 anf (Seq ss)
   = seqStmts <$> mapM anf ss
 anf (While l xs s)
@@ -636,7 +666,7 @@ anf (Exec e)
 anf s
   = abort "anf" s
 
-imm :: (Show a, HasType a)
+imm :: (Show a, HasType a, E.Annot a)
     => IceTExpr a -> ANFM (IceTExpr a, [(E.Id, IceTExpr a)])
 imm e@E.EAny{}
   = return (e, [])
@@ -647,6 +677,10 @@ imm (E.ESymElt s l)
        return (x, bs ++ [(E.varId x, e)])
 imm e@E.EVar{}
   = return (e, [])
+imm e@(E.EVal c (Just (v, p)) l)
+  = do (p', bs) <- immPred p
+       x <- fresh l
+       return (x, bs ++ [(E.varId x, E.EVal c (Just (v, p')) l)])
 imm e@(E.EVal _ _ _)
   = return (e, [])
 imm e@(E.ECon c [] l)
@@ -659,14 +693,40 @@ imm (E.ECon c args l)
 imm e@E.ECase {}
   = do x            <- fresh (E.annot e)
        return (x, [(E.varId x, e)])
-imm e@(E.EApp e1 e2 l)
-  = return (e, [])
+imm e@(E.EApp _ _ l)
+  = do (as', bs) <- unzip <$> mapM imm as
+       let e' = foldl' (\a x -> E.EApp a x l) f as'
+       x          <- fresh l
+       return (x, concat bs ++ [(E.varId x, e')])
+ where
+   (f, as) = E.collectAppArgs e
 imm e
   = abort "imm" e
 
+predExpr p l = E.val $ \v -> p
+predBind x p = [(E.varId x, predExpr p (E.annot x))]
+
+immPred :: (Show a, HasType a, E.Annot a)
+        => E.Pred E.Id a -> ANFM (E.Pred E.Id a, [(E.Id, IceTExpr a)])
+immPred (E.Prop p)
+  = do (p', bs) <- imm p
+       return (E.Prop p', bs)
+immPred (E.BRel o e1 e2)
+  = do (e1', bs1) <- imm e1
+       (e2', bs2) <- imm e2
+       let p' = E.BRel o e1' e2'
+       return (p', bs1 ++ bs2)
+immPred (E.Conj ps)
+  = do (es, bs) <- unzip <$> mapM immPred ps
+       return (E.Conj es, concat bs)
+immPred (p E.:==>: q)
+  = do (p', bs1) <- immPred p
+       (q', bs2) <- immPred q
+       return (p' E.:==>: q', bs1 ++ bs2)
+
 fresh :: a -> ANFM (IceTExpr a)
-fresh l = do i <- get
-             put (i + 1)
+fresh l = do (i, b) <- get
+             put (i + 1, b)
              return (E.EVar ("anf" ++ show i) l)
 
 stitch :: HasType a => [(E.Id, IceTExpr a)] -> IceTStmt a -> IceTStmt a

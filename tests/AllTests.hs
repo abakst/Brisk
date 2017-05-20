@@ -66,8 +66,8 @@ rewriteTest (n, q, expected)
 tys   = [ T.TyVar ("T" ++ show i) | i <- [1..10] ]
 t x   = T.TyVar ("T" ++ show x)
 v x   = T.EVar x ()
-p x   = T.EVal (Just (T.CPid x)) ()
-pset x = T.EVal (Just (T.CPidSet x)) ()
+p x   = T.EVal (Just (T.CPid x)) Nothing ()
+pset x = T.EVal (Just (T.CPidSet x)) Nothing ()
 
 send ti x y = Send (t ti) (p x) (v y)
 sendv ti x y = Send (t ti) (v x) (v y)
@@ -179,7 +179,7 @@ test12 = ("test12", [ Par ["x"] (Singleton "xs") $
 
 test13 = ("test13", [ Par ["x"] (Singleton "xs") $
              One (Unfolded "x" "xs") True $
-               While "bloop" $ Seq [ send 1 "q" "foo", Continue "bloop" ]
+               While "bloop" [] $ Seq [ send 1 "q" "foo", Continue "bloop" ]
          , One (c "q") True $
                recvAny 1 "blue"
          ], [])
@@ -187,7 +187,7 @@ test13Query = runRewrites (\ps -> null [ p | Just p <- contextPid <$> ps, p == (
                           (snd3 test13)
 
 test14 = ("test14", [ One (c "p") True $
-           While "bloop" $ Seq [ recv 0 "q" "what", recv 1 "q" "bloink" ]
+           While "bloop" [] $ Seq [ recv 0 "q" "what", recv 1 "q" "bloink" ]
          , One (c "q") True $
            Seq [ sendb 0 (p "p") (v "abcd"), sendb 1 (p "p") (v "efgh") ]
          ], [])
@@ -240,7 +240,7 @@ workSteal0 =
       
     , Par ["x0"] (Singleton "xs") $
         One (Unfolded "x0" "xs") True $
-          While "loop0" $ Seq [
+          While "loop0" [] $ Seq [
               sendb 1 (p "queue") (v "x0")
             , recv 0 "queue" "what"
             , Case (v "what")
@@ -270,7 +270,7 @@ workSteal =
           ]
     , Par ["x1"] (Singleton "xs") $
         One (Unfolded "x1" "xs") True $
-          While "loop0" $ Seq [
+          While "loop0" [] $ Seq [
               sendb 1 (p "queue") (v "x1")
             , recvAny 0 "what"
             , Case (v "what")
@@ -324,7 +324,7 @@ mapreduce0 =
   where
     worker = Par ["x1"] (Singleton "xs") $
         One (Unfolded "x1" "xs") True $
-          While "loop0" $ Seq [
+          While "loop0" [] $ Seq [
               sendb 1 (p "queue") (v "x1")
             , recv 0 "queue" "what"
             , Case (v "what")
@@ -351,7 +351,7 @@ mapreduce =
           ]
     , Par ["x1"] (Singleton "xs") $
         One (Unfolded "x1" "xs") True $
-          While "loop0" $ Seq [
+          While "loop0" [] $ Seq [
               sendb 1 (p "queue") (v "x1")
             , recv 0 "queue" "what"
             , Case (v "what")
@@ -382,8 +382,8 @@ test8_shouldFail
 testForever =
   ( "forever"
   , [
-      One (c "p") True $ While "m" (Seq [send 0 "q" "y", Continue "m"])
-    , One (c "q") True $ While "l" (Seq [recv 0 "p" "x", Continue "l"])
+      One (c "p") True $ While "m" [] (Seq [send 0 "q" "y", Continue "m"])
+    , One (c "q") True $ While "l" [] (Seq [recv 0 "p" "x", Continue "l"])
     ]
   , []
   )
@@ -391,21 +391,84 @@ testForever =
 testForeverPi =
   ( "foreverPi"
   , [
-      One (c "q") True $ While "l" (Seq [recvAny 1 "x", Continue "l"])
+      One (c "q") True $ While "l" [] (Seq [recvAny 1 "x", Continue "l"])
     , Par ["x"] (Singleton "xs") $
         One (Unfolded "x0" "xs") True $
-          While "m" (Seq [send 1 "q" "y", Continue "m"])
+          While "m" [] (Seq [send 1 "q" "y", Continue "m"])
     ]
   , []
   )
 
+testSendRecvSplit =
+  ( "sendRecvSplit"
+  , [ One (c "a") True $
+        Seq [ recv 2 "b" "_"
+            , Assgn "x*" Nothing (T.ESymElt (T.EVal (Just $ T.CPidSet "xs") Nothing ()) ())
+            , sendb 0 (v "x*") (v "bloog")
+            ]
+    , One (c "b") True $
+        Seq [ sendb 2 (p "a") (v "asdfasdfs")
+            , recvAny 1 "answer"
+            ]
+    , par
+    ]
+  , [ par ]
+  )
+  where
+    par = 
+      Par ["x"] (Singleton "xs") $
+        One (Unfolded "x0" "xs") True $
+          While "l" [] (Seq [ recv 0 "a" "blarg"
+                            , sendb 1 (p "b") (v "done")
+                            , Continue "l"
+                            ]
+                        )
+testSendRecvSplitLoop =
+  ( "sendRecvSplitLoop"
+  , [  master
+    , Par ["y"] (Singleton "ys") $
+        One (Unfolded "y" "ys") True $
+          Seq [ sendb 2 (p "a") (v "y")
+              , recvAny 1 "answer"
+              ]
+    , par
+    ]
+  , [ master, par ]
+  )
+  where
+    master =
+       One (c "a") True $
+         While "xxx" [] $
+             Seq [ recvAny 2 "whom"
+                 , Assgn "x*" Nothing (T.ESymElt (T.EVal (Just $ T.CPidSet "xs") Nothing ()) ())
+                 , sendb 0 (v "x*") (v "whom")
+                 , Continue "xxx"
+                 ]
+    par = 
+      Par ["x"] (Singleton "xs") $
+        One (Unfolded "x" "xs") True $
+          While "l" [] (Seq [ recv 0 "a" "blarg"
+                            , sendb 1 (v "blarg") (v "done")
+                            , Continue "l"
+                            ]
+                        )
+
 testState =
-  initState { symSends   = Env.fromList [(t 1, ["xs"])]
+  initState { symSends   = Env.fromList [(t 1, ["xs"]), (t 2, ["ys"])]
             , concrSends = Env.fromList [(t 0, ["queue"])]
+            , pidSets    = ["ys", "xs"]
             }
 
 doTest q = fst $ findRewrite q testState
 checkTrace q = trace . snd $ findRewrite q testState
+checkTest t = pp $ checkTrace (runRewrites (sameProcs (thd3 t)) (snd3 t))
+
+
+sameProcs [] []     = True
+sameProcs [] ys     = False
+sameProcs xs []     = False
+sameProcs (x:xs) ys = sameProcs xs (filter (/= x) ys)
+  
 
 zoop = FinPar [ One (c "queue") True $
                    Seq [ recvAny 1 "x"

@@ -46,6 +46,7 @@ data RWState a = RWS { ctr        :: !Int
                      , trace      :: !(RWTrace a)
                      , concrSends :: !(Env.Env IceTType [ProcessId])
                      , symSends   :: !(Env.Env IceTType [ProcessId])
+                     , induct     :: Bool
                      }
     
 initState :: RWState s
@@ -58,6 +59,7 @@ initState = RWS { ctr        = 0
                 , trace      = Skip
                 , concrSends = empty
                 , symSends   = empty
+                , induct     = False
                 }
 
 data ProcessIdSpec = Forall ProcessId

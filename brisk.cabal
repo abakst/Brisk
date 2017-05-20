@@ -57,6 +57,7 @@ library
                      , syb
                      , binary
                      , process
+                     , directory
                      , bytestring
                      , utf8-string
                      , ghc
@@ -105,6 +106,8 @@ executable brisk
               , brisk
               , pretty-show
               , utf8-string
+              , process
+              , directory
               , logict
               , mtl
               , bytestring

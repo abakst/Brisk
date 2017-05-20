@@ -61,12 +61,34 @@ type Id = String
 --  Specification Language (Preds, Exprs, Types)
 ----------------------------------------------- 
 data Pred b a = Top | Bot | Conj [Pred b a] | Disj [Pred b a] | LNot (Pred b a)
+              | Prop (EffExpr b a)
               | PVar String [EffExpr b a]
               | Pred b a :==>: Pred b a
               | CHC [b] (Pred b a) (Pred b a)
               | BRel Op (EffExpr b a) (EffExpr b a)
               deriving (Eq, Show, Functor, Generic)
 instance (Serialize b, Serialize a) => Serialize (Pred b a)
+
+x .= y    = BRel Eq x y
+x .&& y   = Conj [x, y]
+x .|| y   = Disj [x, y]
+x .<==> y = Conj [x :==>: y, y :==>: x]
+x .< y    = BRel Le (x .+ int 1) y
+
+tt, ff :: Annot a => EffExpr Id a
+tt = ECon "true" [] dummyAnnot
+ff = ECon "false" [] dummyAnnot
+
+binop :: Annot a => Id -> EffExpr Id a -> EffExpr Id a -> EffExpr Id a
+binop n x y = EApp (EApp (EVar n dummyAnnot) x dummyAnnot)
+                   y
+                   dummyAnnot
+-- Expressions
+int x  = EVal (Just (CInt x)) Nothing dummyAnnot
+x .+ y = binop "+" x y
+x .- y = binop "-" x y
+
+
 
 -- (+) :: val $ \v -> v .= 
 ----------------------------------------------- 
@@ -232,6 +254,9 @@ splitAppTys t = abort "splitAppTys" t
 ----------------------------------------------- 
 -- | Operations on Expressions  
 ----------------------------------------------- 
+idExpr :: Annot a => b -> EffExpr b a
+idExpr = flip EVar dummyAnnot
+  
 txExprPid :: (Id -> a -> EffExpr b a) -> EffExpr b a -> EffExpr b a
 txExprPid f
   = txExprIds (\v l -> EVar v l) f
@@ -499,10 +524,11 @@ instance Pretty Const where
 instance (Pretty b, Pretty (EffExpr b a)) => Pretty (Pred b a) where
   ppPrec _ Top         = text "⊤"
   ppPrec _ Bot         = text "⊥"
+  ppPrec _ (Prop p)    = text "Prop" <> parens (pp p)
   ppPrec _ (p :==>: q) = parens (pp p <+> text "⇒" <+> pp q)
   ppPrec _ (CHC xs p q) = text "∀" <> brackets (hcat $ list xs)
                                       <> text "."
-                                      <+> pp (p :==>: q)
+                                      <+> pp p <+> text "====>" <+> pp q
   ppPrec _ (PVar p xs) = text p <+> (hcat $ list xs)
   ppPrec _ (Conj [φ]) = pp φ
   ppPrec _ (Disj [φ]) = pp φ
@@ -647,7 +673,8 @@ substPred θ (LNot φ)       = LNot $ substPred θ φ
 substPred θ (BRel o e1 e2) = BRel o (subst θ e1) (subst θ e2)
 substPred θ (PVar p xs)    = PVar p (subst θ <$> xs)
 substPred θ (CHC xs p q)   = CHC xs (substPred θ' p) (substPred θ' q)
-  where θ' = [ (x,e) | (x,e) <- θ, x `notElem` xs ]
+  where θ' = restrSubst θ xs
+substPred θ (Prop e)       = Prop (subst θ e)
 substPred θ φ              = φ
 
 fvPred :: (Avoid b, Annot a, Ord b) => Pred b a -> Set.Set b
@@ -658,6 +685,7 @@ fvPred (LNot p)       = fvPred p
 fvPred (BRel o e1 e2) = Set.union (fv e1) (fv e2)
 fvPred (PVar p xs)    = Set.unions (fv <$> xs)
 fvPred (CHC xs p q)   = Set.union (fvPred p) (fvPred q) Set.\\ Set.fromList xs
+fvPred (Prop e)       = fv e
 fvPred Top            = Set.empty
 fvPred Bot            = Set.empty
 
