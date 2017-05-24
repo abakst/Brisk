@@ -35,6 +35,7 @@ data IceTStmt_ b a = Send IceTType (E.EffExpr b a) (E.EffExpr b a)
                    | Continue E.Id
                    | Exec (E.EffExpr b a)
                    -- Only occurs in rw traces, XAssgn p x p e ==> (x_p := eval(p,e))
+                   | XUnfold b b (IceTStmt_ b a) -- unfold xs as x in s
                    | XAssgn b b b (E.EffExpr b a)
                    | XForEach E.Id [E.Id] (Bool, E.EffExpr b a) (IceTStmt_ b a)
                    | Assert (E.EffExpr b a)
@@ -756,6 +757,10 @@ instance Pretty (IceTStmt a) where
     = pp x <+> text ":=" <+> pp e
   ppPrec _ (XAssgn p x q e)
     = pp x <> brackets (pp p) <+> text ":=" <+> pp e <+> text "@" <> pp q
+
+  ppPrec _ (XUnfold ps p s)
+    = text "unfold" <+> pp p <+> text "<-" <+> pp ps <> text ":" $$
+      nest 2 (pp s)
 
   ppPrec _ (Seq ss)
     = vcat (ppPrec 0 <$> ss)

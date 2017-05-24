@@ -94,8 +94,13 @@ x .- y = binop "-" x y
 ----------------------------------------------- 
 -- Constructors for supported theories
 ----------------------------------------------- 
+vv = "$vv"
+
+vvExpr :: Annot a => EffExpr Id a
+vvExpr = EVar "$vv" dummyAnnot
+
 val :: Annot a => (EffExpr Id a -> Pred Id a) -> EffExpr Id a
-val f = EVal Nothing (Just ("$vv", f (EVar "$vv" dummyAnnot))) dummyAnnot
+val f = EVal Nothing (Just (vv, f vvExpr)) dummyAnnot
 
 data Const = CInt Int          
            | CPid Id
@@ -418,9 +423,6 @@ dataConId d
   | d == nilDataCon  = "Nil"
   | isTupleDataCon d = "Tuple"
   | otherwise        = nameId (getName (dataConWorkId d))
-
-vv :: Id
-vv = "#vv"
 
 exprString :: Pretty (EffExpr b a) => EffExpr b a -> String
 exprString e = render (pp e)
