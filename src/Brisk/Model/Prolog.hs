@@ -44,7 +44,7 @@ runRewriter e mdest
                               % " --goal "    % w
                               % " --noinfo --nologo "
                               % "2>/dev/null "
-                              % "1>/dev/null "
+                              -- % "1>/dev/null "
                               ) (fromString rw) query
          output tmp (select $ textToLines rwquery)
          l <- select $ textToLines cmd
@@ -83,12 +83,14 @@ template tmp
   = format ( "consult('"%fp%"'),"
            % "rewrite_query(T,R),"
            % s
+           % "set_output(user_output),"
+           % "portray_clause(D),"
            % "halt(0)."
            ) tmp check
   where
     check = format ("("%s%", ("%s%"; halt("%d%")) ; halt("%d%")),") rf rw notDLFree notSND
     rf = format ("catch(check_race_freedom(T,T1),_,halt("%d%")),!") notSND
-    rw = format ("catch(rewrite(T1,R,_,_),_,halt("%d%"))") notDLFree
+    rw = format ("catch(rewrite(T1,R,D,_),_,halt("%d%"))") notDLFree
     
 data BriskAnnot a = BriskAnnot { isPatternVar :: Bool
                                , annot        :: a
